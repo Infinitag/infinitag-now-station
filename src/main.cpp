@@ -601,6 +601,25 @@ static void applyStationConfig() {
     gVolume = VOLUME_MAX * ((float)gSettings.volumePct / 100.0f);
 }
 
+// ── Selbsttest-Hooks (DEBUG_CMD via Config-Box, siehe NowStation.h) ─────────
+static uint32_t gLaserTestOffMs = 0;   // Auto-Aus fuer den Laser-Testpuls
+
+static void hookLedTest() { neopixelBootTest(); }
+
+static void hookLaserPulse(uint8_t seconds) {
+    gLaserOn = true;
+    digitalWrite(LASER_PIN, HIGH);
+    gLaserTestOffMs = millis() + (uint32_t)seconds * 1000UL;
+}
+
+static bool hookIrBurst(uint8_t ms) {
+    sendIrBurst(ms);      // setzt gLastIrOk (TSOP-Selbstempfang)
+    return gLastIrOk;
+}
+
+static const DebugHooks kDebugHooks = {hookLedTest, hookLaserPulse,
+                                       hookIrBurst};
+
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
@@ -726,7 +745,7 @@ void setup() {
     gSettings.load();
     applyStationConfig();
     if (gNow.begin(&gSettings, playSoundByIndex, (uint8_t)NUM_SOUNDS,
-                   applyStationConfig)) {
+                   applyStationConfig, &kDebugHooks)) {
         const uint8_t* m = gNow.ownMac();
         Serial.printf("[NOW]  ESP-NOW bereit, ID=%u, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
             gSettings.stationId, m[0], m[1], m[2], m[3], m[4], m[5]);
@@ -748,6 +767,14 @@ void loop() {
     // Infinitag Now: RX-Queue abarbeiten (Discovery/Identify/CFG/Hit/Setup)
     gNow.loop();
     if (gNow.consumeDirty()) needRedraw = true;
+
+    // Selbsttest: Laser-Testpuls automatisch beenden
+    if (gLaserTestOffMs != 0 && millis() >= gLaserTestOffMs) {
+        gLaserTestOffMs = 0;
+        gLaserOn = false;
+        digitalWrite(LASER_PIN, LOW);
+        needRedraw = true;
+    }
 
     // Debug: alle 2 s Roh-Pegel der vier Buttons loggen.
     // Erwartung im Ruhezustand: alle = 1 (Pullup hoch, Taste nicht gedrueckt).
@@ -840,6 +867,10 @@ void loop() {
         // Persistiert die angebotene ID, broadcastet SETUP_TAKE, spielt
         // den Setup-Sound. KEIN IR-Burst, kein normaler Schuss.
         gNow.confirmSetup();
+        needRedraw = true;
+      } else if (gNow.consumeTriggerTest()) {
+        // Selbsttest: Trigger-Test bestanden (Ergebnis geht per Funk an
+        // die Config-Box) – kein Schuss ausloesen.
         needRedraw = true;
       } else {
         Serial.printf("[TRIG] Trigger ausgeloest (Trig #%lu) – IR + Sound %s\n",

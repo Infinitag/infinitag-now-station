@@ -28,6 +28,7 @@ pio device monitor
 | `CFG_TEST_SOUND` | spielt den Sound ab (ohne Persistierung) |
 | `HIT_REPORT` | spielt den Sound, wenn `station_id` im Header der eigenen entspricht |
 | `SETUP_BEGIN` | Setup-Modus: LEDs lila, Trigger = „diese ID übernehmen", dann `SETUP_TAKE`-Broadcast |
+| `DEBUG_CMD` | Ferngesteuerter Selbsttest: Sound, LED-Muster, Laser (Auto-Aus), IR-Burst inkl. TSOP-Selbstempfang, Trigger-Warten; Ergebnis als `DEBUG_RESULT` |
 
 Details: `PROTOCOL.md` im Core-Repo. Persistenz: `src/StationSettings.*`
 (NVS, Namespace `inow-station`). Protokoll-Handling: `src/NowStation.*`.

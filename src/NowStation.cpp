@@ -11,7 +11,9 @@ static constexpr uint8_t FW_MINOR = 1;
 static constexpr uint8_t FW_PATCH = 0;
 
 bool NowStation::begin(StationSettings *settings, PlayFn playFn,
-                       uint8_t numSounds, ConfigChangedFn onConfigChanged) {
+                       uint8_t numSounds, ConfigChangedFn onConfigChanged,
+                       const DebugHooks *hooks) {
+  _hooks = hooks;
   _settings = settings;
   _play = playFn;
   _numSounds = numSounds;
@@ -23,6 +25,91 @@ bool NowStation::begin(StationSettings *settings, PlayFn playFn,
 void NowStation::loop() {
   RxPacket rx;
   while (_net.receive(rx)) handlePacket(rx);
+
+  // armed trigger test timed out?
+  if (_trigTestUntil != 0 && millis() >= _trigTestUntil) {
+    _trigTestUntil = 0;
+    sendDebugResult(_trigTestMac, DBG_TRIGGER, DBG_RES_TIMEOUT);
+    Serial.println("[NOW] Trigger-Test: TIMEOUT");
+    _dirty = true;
+  }
+}
+
+bool NowStation::consumeTriggerTest() {
+  if (_trigTestUntil == 0 || millis() >= _trigTestUntil) return false;
+  _trigTestUntil = 0;
+  sendDebugResult(_trigTestMac, DBG_TRIGGER, DBG_RES_OK);
+  Serial.println("[NOW] Trigger-Test: OK (gedrueckt)");
+  _dirty = true;
+  return true;
+}
+
+void NowStation::sendDebugResult(const uint8_t mac[6], uint8_t test,
+                                 uint8_t result) {
+  Packet p;
+  init(p, MSG_DEBUG_RESULT, DEV_STATION);
+  p.station_id = _settings->stationId;
+  p.payload[0] = test;
+  p.payload[1] = result;
+  _net.send(mac, p);
+}
+
+void NowStation::handleDebugCmd(const RxPacket &rx) {
+  const uint8_t test = rx.pkt.payload[0];
+  const uint8_t param = rx.pkt.payload[1];
+  Serial.printf("[NOW] DEBUG_CMD: Test %u, Param %u\n", test, param);
+
+  switch (test) {
+    case DBG_SOUND:
+      if (_play && param < _numSounds) {
+        _play(param);  // blocking; result marks "done playing"
+        sendDebugResult(rx.mac, test, DBG_RES_OK);
+      } else {
+        sendDebugResult(rx.mac, test, DBG_RES_FAIL);
+      }
+      break;
+
+    case DBG_LED:
+      if (_hooks && _hooks->ledTest) {
+        _hooks->ledTest();
+        sendDebugResult(rx.mac, test, DBG_RES_OK);
+      } else {
+        sendDebugResult(rx.mac, test, DBG_RES_UNSUPPORTED);
+      }
+      break;
+
+    case DBG_LASER:
+      if (_hooks && _hooks->laserPulse) {
+        uint8_t s = param == 0 ? 2 : param;
+        if (s > 10) s = 10;  // safety clamp
+        _hooks->laserPulse(s);
+        sendDebugResult(rx.mac, test, DBG_RES_OK);
+      } else {
+        sendDebugResult(rx.mac, test, DBG_RES_UNSUPPORTED);
+      }
+      break;
+
+    case DBG_IR:
+      if (_hooks && _hooks->irBurst) {
+        const bool ok = _hooks->irBurst(param == 0 ? 1 : param);
+        sendDebugResult(rx.mac, test, ok ? DBG_RES_OK : DBG_RES_FAIL);
+      } else {
+        sendDebugResult(rx.mac, test, DBG_RES_UNSUPPORTED);
+      }
+      break;
+
+    case DBG_TRIGGER: {
+      const uint8_t s = param == 0 ? 10 : param;
+      _trigTestUntil = millis() + (uint32_t)s * 1000UL;
+      memcpy(_trigTestMac, rx.mac, 6);
+      _dirty = true;  // display may show "Trigger druecken!"
+      break;
+    }
+
+    default:
+      sendDebugResult(rx.mac, test, DBG_RES_UNSUPPORTED);
+      break;
+  }
 }
 
 bool NowStation::consumeDirty() {
@@ -145,6 +232,11 @@ void NowStation::handlePacket(const RxPacket &rx) {
       _dirty = true;
       Serial.printf("[NOW] SETUP_BEGIN: pending id=%u, timeout=%us\n",
                     _setupPendingId, p.payload[0]);
+      break;
+
+    case MSG_DEBUG_CMD:
+      if (p.device_type == DEV_STATION || p.device_type == DEV_ANY)
+        handleDebugCmd(rx);
       break;
 
     case MSG_SETUP_TAKE:

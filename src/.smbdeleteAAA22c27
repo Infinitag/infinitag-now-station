@@ -409,49 +409,6 @@ void neopixelSetSolid(uint32_t color) {
     strip.show();
 }
 
-// ── Status-LED: Kanal-Maske → NeoPixel-Farbe ────────────────────────────────
-// LED-Maske aus dem Station-Config-Blob (PROTOCOL.md): bit0=R, bit1=G,
-// bit2=B, bit3=W. Jeder gesetzte Die voll an – Helligkeit regelt global
-// strip.setBrightness().
-static uint32_t maskToColor(uint8_t mask) {
-    return Adafruit_NeoPixel::Color(
-        (mask & 0x01) ? 255 : 0,
-        (mask & 0x02) ? 255 : 0,
-        (mask & 0x04) ? 255 : 0,
-        (mask & 0x08) ? 255 : 0);
-}
-
-// ── Status-LED: Stab-Farbe nach Prioritaet setzen ───────────────────────────
-// Identify-Blink (weiss, 200 ms) > Setup-Modus (lila) > beschaeftigt
-// (Audio spielt, Default rot) > schussbereit (Default gruen). Farben fuer
-// bereit/beschaeftigt kommen aus der persistenten Config (ledReady/ledBusy).
-// Schreibt nur bei Farbwechsel auf den Bus. Wird im loop() gerufen UND
-// direkt vor/nach blockierenden playWav()-Aufrufen, weil loop() waehrend
-// der Wiedergabe nicht laeuft.
-static void updateStatusLed() {
-    static bool     init = false;
-    static uint32_t last = 0;
-
-    uint32_t color;
-    if (gNow.identifyActive()) {
-        // Doc 18 §7: weisses schnelles Pulsen, selbstloeschend nach dem
-        // 700-ms-Fenster der Config-Box.
-        color = ((millis() / 200) % 2 == 0) ? strip.Color(0, 0, 0, 180) : 0;
-    } else if (gNow.setupActive()) {
-        color = strip.Color(120, 0, 120);
-    } else if (gPlayState == PLAYING) {
-        color = maskToColor(gSettings.ledBusy);
-    } else {
-        color = maskToColor(gSettings.ledReady);
-    }
-
-    if (!init || color != last) {
-        init = true;
-        last = color;
-        neopixelSetSolid(color);
-    }
-}
-
 // ── NeoPixel: Farb-Palette-Cycle (im Loop aufrufen) ─────────────────────────
 // Schaltet ALLE LEDs gemeinsam durch eine volle Farb-Palette (je 'holdMs'):
 //   1) Grundfarben + Mischfarben mit W-Kanal AUS:
@@ -630,13 +587,11 @@ static void playSoundByIndex(uint8_t idx) {
     PlayState prev = gPlayState;
     gPlayState = PLAYING;
     drawDisplay();
-    updateStatusLed();          // busy-Farbe VOR dem blockierenden playWav
     playWav(SOUNDS[idx].path);
     gPlayCount++;
     gLastPlayMs = millis();
     gPlayState  = prev;
     if (prev == IDLE_STREAM) digitalWrite(XSMT_PIN, HIGH);
-    updateStatusLed();          // zurueck auf bereit
     drawDisplay();
 }
 
@@ -707,9 +662,9 @@ void setup() {
     Serial.printf("[NEO]  %d x SK6812 RGB auf GPIO%d, Brightness %d/255\n",
         NEOPIXEL_COUNT, NEOPIXEL_PIN, NEOPIXEL_BRIGHT);
     neopixelBootTest();
-    // Danach zeigt der Stab die Statusfarbe (bereit/beschaeftigt), gesetzt
-    // von updateStatusLed() – erster Aufruf am Ende von setup(), sobald die
-    // persistente Config (ledReady/ledBusy) geladen ist.
+    // Danach laeuft im loop() ein R/G/B-Cycle ueber alle LEDs (siehe unten).
+    // Start mit Rot, damit kein kurzer Weiss-Blitz beim Boot auftritt.
+    neopixelSetSolid(strip.Color(255, 0, 0));
 
     // Buttons + Trigger mit internen Pullups
     for (uint8_t i = 0; i < 5; i++) {
@@ -798,9 +753,8 @@ void setup() {
         Serial.println("[NOW]  FEHLER: ESP-NOW-Init fehlgeschlagen!");
     }
 
-    // Erster Display-Refresh + Stab auf Statusfarbe (bereit)
+    // Erster Display-Refresh
     drawDisplay();
-    updateStatusLed();
     Serial.println("[Setup] Bereit. K1 = Volume cyclen, K2 = Sound cyclen,");
     Serial.println("        K3 = Laser, K4 = aktuellen Sound vorhoeren,");
     Serial.println("        Trigger (GPIO4) = IR-Burst + aktuellen Sound abspielen.");
@@ -888,7 +842,6 @@ void loop() {
         PlayState prev = gPlayState;
         gPlayState = PLAYING;
         drawDisplay();          // Status sofort sichtbar
-        updateStatusLed();      // busy-Farbe VOR dem blockierenden playWav
 
         playWav(SOUNDS[gSoundIdx].path);
 
@@ -898,7 +851,6 @@ void loop() {
         if (prev == IDLE_STREAM) {
             digitalWrite(XSMT_PIN, HIGH);
         }
-        updateStatusLed();
         needRedraw  = true;
     }
 
@@ -926,7 +878,6 @@ void loop() {
         PlayState prev = gPlayState;
         gPlayState = PLAYING;
         drawDisplay();
-        updateStatusLed();      // busy-Farbe VOR dem blockierenden playWav
 
         sendIrBurst(1);
         playWav(SOUNDS[gSoundIdx].path);
@@ -938,16 +889,25 @@ void loop() {
         if (prev == IDLE_STREAM) {
             digitalWrite(XSMT_PIN, HIGH);
         }
-        updateStatusLed();
         needRedraw = true;
       }
     }
 
     if (needRedraw) drawDisplay();
 
-    // Stab-Statusfarbe (Prioritaet siehe updateStatusLed):
-    // Identify-Blink > Setup-Lila > busy (Audio) > bereit.
-    updateStatusLed();
+    // NeoPixel-Prioritaet: Identify-Blink > Setup-Modus > Farb-Sichttest.
+    //   Identify (Doc 18 § 7): weisses schnelles Pulsen (200 ms an/aus),
+    //     selbstloeschend nach dem 700-ms-Fenster der Config-Box.
+    //   Setup-Modus: dauerhaft Lila, bis Trigger/Timeout/SETUP_TAKE.
+    //   Sonst: Dauer-Sichttest mit voller Farb-Palette (je 800 ms).
+    if (gNow.identifyActive()) {
+        const bool on = (millis() / 200) % 2 == 0;
+        neopixelSetSolid(on ? strip.Color(0, 0, 0, 180) : 0);
+    } else if (gNow.setupActive()) {
+        neopixelSetSolid(strip.Color(120, 0, 120));
+    } else {
+        neopixelCyclePalette(800);
+    }
 
     delay(5);   // kurze Pause → schont CPU, Debouncer arbeitet stabil
 }

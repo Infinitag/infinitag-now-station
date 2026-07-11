@@ -10,8 +10,6 @@ void StationSettings::load() {
   stationId = prefs.getUChar("id", 0);
   volumePct = prefs.getUChar("vol", 50);
   setupSound = prefs.getUChar("snd", 13);
-  ledReady = prefs.getUChar("ledrdy", 0x02);
-  ledBusy = prefs.getUChar("ledbsy", 0x01);
   prefs.end();
 }
 
@@ -21,7 +19,5 @@ void StationSettings::save() const {
   prefs.putUChar("id", stationId);
   prefs.putUChar("vol", volumePct);
   prefs.putUChar("snd", setupSound);
-  prefs.putUChar("ledrdy", ledReady);
-  prefs.putUChar("ledbsy", ledBusy);
   prefs.end();
 }

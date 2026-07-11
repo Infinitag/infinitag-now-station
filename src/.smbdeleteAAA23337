@@ -130,8 +130,6 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
   c.station_id = _settings->stationId;
   c.volume_pct = _settings->volumePct;
   c.default_setup_sound = _settings->setupSound;
-  c.led_ready = _settings->ledReady;
-  c.led_busy = _settings->ledBusy;
   r.config_blob_len = STATION_BLOB_SIZE;
   encodeStationConfig(c, r.config_blob);
 
@@ -194,23 +192,19 @@ void NowStation::handlePacket(const RxPacket &rx) {
       StationConfig c;
       decodeStationConfig(p.payload, STATION_BLOB_SIZE, c);
       if (c.station_id < 1 || c.station_id > 99 || c.volume_pct > 100 ||
-          c.default_setup_sound >= _numSounds ||
-          c.led_ready > LED_MASK_MAX || c.led_busy > LED_MASK_MAX) {
+          c.default_setup_sound >= _numSounds) {
         sendAck(rx.mac, ACK_NACK_VALIDATION);
         break;
       }
       _settings->stationId = c.station_id;
       _settings->volumePct = c.volume_pct;
       _settings->setupSound = c.default_setup_sound;
-      _settings->ledReady = c.led_ready;
-      _settings->ledBusy = c.led_busy;
       _settings->save();
       if (_onConfigChanged) _onConfigChanged();
       _dirty = true;
       sendAck(rx.mac, ACK_OK);
-      Serial.printf("[NOW] CFG_WRITE: id=%u vol=%u%% setupSnd=%u ledRdy=0x%X ledBsy=0x%X\n",
-                    c.station_id, c.volume_pct, c.default_setup_sound,
-                    c.led_ready, c.led_busy);
+      Serial.printf("[NOW] CFG_WRITE: id=%u vol=%u%% setupSnd=%u\n",
+                    c.station_id, c.volume_pct, c.default_setup_sound);
       break;
     }
 

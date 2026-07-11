@@ -38,6 +38,9 @@
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>
 
+#include "NowStation.h"
+#include "StationSettings.h"
+
 // ── Pins: Audio ──────────────────────────────────────────────────────────────
 #define I2S_BCLK     15
 #define I2S_LRC      16
@@ -248,6 +251,10 @@ static uint32_t   gIrCount     = 0;   // gesendete IR-Bursts
 static bool       gLastIrOk    = false; // letzter Burst: TSOP hat empfangen?
 static bool       gLaserOn     = false;
 
+// ── Infinitag Now: persistente Config + ESP-NOW-Gerätelogik ─────────────────
+static StationSettings gSettings;
+static NowStation      gNow;
+
 void drawDisplay() {
     // Display ist 128 x 64 Pixel.
     // U8g2 nutzt Baseline-Y; mit u8g2_font_6x10_tf hat eine Zeile rund 10 px
@@ -266,7 +273,10 @@ void drawDisplay() {
 
     // Kopf
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 8, "Infinitag Station V2");
+    char hdr[24];
+    if (gSettings.stationId == 0) snprintf(hdr, sizeof(hdr), "Station V2   ID:??");
+    else snprintf(hdr, sizeof(hdr), "Station V2   ID:%02u", gSettings.stationId);
+    u8g2.drawStr(0, 8, hdr);
     u8g2.drawHLine(0, 10, 128);
 
     // Status groß. Priorität:
@@ -277,6 +287,8 @@ void drawDisplay() {
     const char* statusStr;
     if (gPlayState == PLAYING) {
         statusStr = "Playing...";
+    } else if (gNow.setupActive()) {
+        statusStr = "SETUP-Modus";
     } else if (gPlayState == IDLE_STREAM) {
         statusStr = "DAC idle";
     } else if (gLaserOn) {
@@ -567,6 +579,28 @@ void playWav(const char* path) {
     Serial.println("[WAV] Fertig.");
 }
 
+// ── Infinitag Now: Helfer ────────────────────────────────────────────────────
+// Spielt einen Sound per 0-basiertem Index (fuer ESP-NOW-Handler: Test-Sound,
+// HIT_REPORT, Setup-Bestaetigung). Gleiches PlayState-Handling wie K4.
+static void playSoundByIndex(uint8_t idx) {
+    if (idx >= NUM_SOUNDS) return;
+    PlayState prev = gPlayState;
+    gPlayState = PLAYING;
+    drawDisplay();
+    playWav(SOUNDS[idx].path);
+    gPlayCount++;
+    gLastPlayMs = millis();
+    gPlayState  = prev;
+    if (prev == IDLE_STREAM) digitalWrite(XSMT_PIN, HIGH);
+    drawDisplay();
+}
+
+// Wendet die persistente Config auf die Laufzeit-Variablen an (Volume in %
+// des Speaker-Limits). Wird nach Boot und nach jedem CFG_WRITE gerufen.
+static void applyStationConfig() {
+    gVolume = VOLUME_MAX * ((float)gSettings.volumePct / 100.0f);
+}
+
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
@@ -686,6 +720,20 @@ void setup() {
     Serial.printf("[SND]  Aktuell ausgewaehlt: [%u] %s\n",
         (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].shortName);
 
+    // Infinitag Now: persistente Config laden, anwenden, Funk starten.
+    // WICHTIG: nach LittleFS/I2S, damit ein frueh eintreffendes CFG/Test-
+    // Paket bereits abspielen kann.
+    gSettings.load();
+    applyStationConfig();
+    if (gNow.begin(&gSettings, playSoundByIndex, (uint8_t)NUM_SOUNDS,
+                   applyStationConfig)) {
+        const uint8_t* m = gNow.ownMac();
+        Serial.printf("[NOW]  ESP-NOW bereit, ID=%u, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
+            gSettings.stationId, m[0], m[1], m[2], m[3], m[4], m[5]);
+    } else {
+        Serial.println("[NOW]  FEHLER: ESP-NOW-Init fehlgeschlagen!");
+    }
+
     // Erster Display-Refresh
     drawDisplay();
     Serial.println("[Setup] Bereit. K1 = Volume cyclen, K2 = Sound cyclen,");
@@ -696,6 +744,10 @@ void setup() {
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
     bool needRedraw = false;
+
+    // Infinitag Now: RX-Queue abarbeiten (Discovery/Identify/CFG/Hit/Setup)
+    gNow.loop();
+    if (gNow.consumeDirty()) needRedraw = true;
 
     // Debug: alle 2 s Roh-Pegel der vier Buttons loggen.
     // Erwartung im Ruhezustand: alle = 1 (Pullup hoch, Taste nicht gedrueckt).
@@ -783,6 +835,13 @@ void loop() {
     // So kann man mit K4 den Sound waehlen und dann mit dem Stab beliebig
     // oft "feuern". Frueher fix DOOR_BANG_WAV, jetzt der ausgewaehlte Sound.
     if (btnPressedEdge(gBtns[4])) {
+      if (gNow.setupActive()) {
+        // SETUP-Modus (Doc 18 § 6.1): Trigger ist Bestaetigungstaster.
+        // Persistiert die angebotene ID, broadcastet SETUP_TAKE, spielt
+        // den Setup-Sound. KEIN IR-Burst, kein normaler Schuss.
+        gNow.confirmSetup();
+        needRedraw = true;
+      } else {
         Serial.printf("[TRIG] Trigger ausgeloest (Trig #%lu) – IR + Sound %s\n",
             (unsigned long)(gTrigCount + 1), SOUNDS[gSoundIdx].shortName);
         PlayState prev = gPlayState;
@@ -800,15 +859,24 @@ void loop() {
             digitalWrite(XSMT_PIN, HIGH);
         }
         needRedraw = true;
+      }
     }
 
     if (needRedraw) drawDisplay();
 
-    // NeoPixel: Dauer-Sichttest – volle Farb-Palette (je 800 ms):
-    // Rot → Gelb → Gruen → Cyan → Blau → Magenta → Weiss(W), danach
-    // dieselben Mischfarben zusaetzlich mit W-Kanal. Prueft alle Dies,
-    // Mischungen und das RGB+W-Zusammenspiel der SK6812 RGBW.
-    neopixelCyclePalette(800);
+    // NeoPixel-Prioritaet: Identify-Blink > Setup-Modus > Farb-Sichttest.
+    //   Identify (Doc 18 § 7): weisses schnelles Pulsen (200 ms an/aus),
+    //     selbstloeschend nach dem 700-ms-Fenster der Config-Box.
+    //   Setup-Modus: dauerhaft Lila, bis Trigger/Timeout/SETUP_TAKE.
+    //   Sonst: Dauer-Sichttest mit voller Farb-Palette (je 800 ms).
+    if (gNow.identifyActive()) {
+        const bool on = (millis() / 200) % 2 == 0;
+        neopixelSetSolid(on ? strip.Color(0, 0, 0, 180) : 0);
+    } else if (gNow.setupActive()) {
+        neopixelSetSolid(strip.Color(120, 0, 120));
+    } else {
+        neopixelCyclePalette(800);
+    }
 
     delay(5);   // kurze Pause → schont CPU, Debouncer arbeitet stabil
 }

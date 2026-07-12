@@ -34,6 +34,7 @@
 #include <Arduino.h>
 #include "driver/i2s.h"
 #include <LittleFS.h>
+#include <Update.h>
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>
@@ -687,15 +688,21 @@ static void runPushReceiveMode() {
                 case inow::PUSH_ACK_FINAL_FLASH: why = "Flash-Fehler"; break;
                 default:                         why = "Funkstille"; break;
             }
-            Serial.printf("[PUSH] Abbruch (%s) -> Reboot (alte FW)\n", why);
+            Serial.printf("[PUSH] Abbruch (%s / Update-Err %u: %s)\n", why,
+                          Update.getError(), Update.errorString());
             u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_7x14B_tf);
             u8g2.drawStr(0, 26, "Update-Fehler:");
             u8g2.drawStr(0, 44, why);
             u8g2.setFont(u8g2_font_6x10_tf);
-            u8g2.drawStr(0, 62, "Neustart mit alter FW...");
+            // Detailgrund der Update-Lib (z. B. "Could Not Activate...")
+            char detail[32];
+            snprintf(detail, sizeof(detail), "#%u %s", Update.getError(),
+                     Update.errorString());
+            u8g2.drawStr(0, 54, detail);
+            u8g2.drawStr(0, 63, "Neustart mit alter FW...");
             u8g2.sendBuffer();
-            delay(4000);   // lange genug zum Ablesen
+            delay(6000);   // lange genug zum Ablesen
             ESP.restart();
         }
         delay(2);

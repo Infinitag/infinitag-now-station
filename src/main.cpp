@@ -40,6 +40,7 @@
 
 #include "NowStation.h"
 #include "StationSettings.h"
+#include "WebUpdateService.h"
 
 // ── Pins: Audio ──────────────────────────────────────────────────────────────
 #define I2S_BCLK     15
@@ -271,11 +272,12 @@ void drawDisplay() {
     //   y=62  Footer Baseline   (Pixel 55..62)
     u8g2.clearBuffer();
 
-    // Kopf
+    // Kopf: seit Protokoll v0x02 identifiziert das MAC-Suffix die Station
+    // (keine anwender-vergebene ID mehr).
     u8g2.setFont(u8g2_font_6x10_tf);
     char hdr[24];
-    if (gSettings.stationId == 0) snprintf(hdr, sizeof(hdr), "Station V2   ID:??");
-    else snprintf(hdr, sizeof(hdr), "Station V2   ID:%02u", gSettings.stationId);
+    const uint8_t* hm = gNow.ownMac();
+    snprintf(hdr, sizeof(hdr), "Station V2   %02X%02X%02X", hm[3], hm[4], hm[5]);
     u8g2.drawStr(0, 8, hdr);
     u8g2.drawHLine(0, 10, 128);
 
@@ -287,8 +289,6 @@ void drawDisplay() {
     const char* statusStr;
     if (gPlayState == PLAYING) {
         statusStr = "Playing...";
-    } else if (gNow.setupActive()) {
-        statusStr = "SETUP-Modus";
     } else if (gPlayState == IDLE_STREAM) {
         statusStr = "DAC idle";
     } else if (gLaserOn) {
@@ -422,9 +422,9 @@ static uint32_t maskToColor(uint8_t mask) {
 }
 
 // ── Status-LED: Stab-Farbe nach Prioritaet setzen ───────────────────────────
-// Identify-Blink (weiss, 200 ms) > Setup-Modus (lila) > beschaeftigt
-// (Audio spielt, Default rot) > schussbereit (Default gruen). Farben fuer
-// bereit/beschaeftigt kommen aus der persistenten Config (ledReady/ledBusy).
+// Identify-Blink (weiss, 200 ms) > beschaeftigt (Audio spielt, Default rot)
+// > schussbereit (Default gruen). Farben fuer bereit/beschaeftigt kommen
+// aus der persistenten Config (ledReady/ledBusy).
 // Schreibt nur bei Farbwechsel auf den Bus. Wird im loop() gerufen UND
 // direkt vor/nach blockierenden playWav()-Aufrufen, weil loop() waehrend
 // der Wiedergabe nicht laeuft.
@@ -437,8 +437,6 @@ static void updateStatusLed() {
         // Doc 18 §7: weisses schnelles Pulsen, selbstloeschend nach dem
         // 700-ms-Fenster der Config-Box.
         color = ((millis() / 200) % 2 == 0) ? strip.Color(0, 0, 0, 180) : 0;
-    } else if (gNow.setupActive()) {
-        color = strip.Color(120, 0, 120);
     } else if (gPlayState == PLAYING) {
         color = maskToColor(gSettings.ledBusy);
     } else {
@@ -646,6 +644,71 @@ static void applyStationConfig() {
     gVolume = VOLUME_MAX * ((float)gSettings.volumePct / 100.0f);
 }
 
+// ── SoftAP-Firmware-Update (UPDATE_BEGIN via Config-Box) ────────────────────
+// Blockierender Modus: ESP-NOW wird beendet, offener AP + Upload-Seite
+// (geteiltes WebUpdateService-Modul aus infinitag-now-core). Endet IMMER
+// in ESP.restart(): nach erfolgreichem Update in die neue Firmware, nach
+// Timeout ohne Upload zurueck in die alte. Ein abgebrochener Upload kann
+// nicht booten (Boot-Slot wechselt erst nach validiertem Empfang).
+static void runUpdateMode(uint8_t minutes) {
+    const uint8_t* m = gNow.ownMac();
+    char ap[32];
+    snprintf(ap, sizeof(ap), "infinitag-sta-%02X%02X%02X", m[3], m[4], m[5]);
+    char ver[16];
+    snprintf(ver, sizeof(ver), "%u.%u.%u", STATION_FW_MAJOR, STATION_FW_MINOR,
+             STATION_FW_PATCH);
+
+    // UPDATE_ACK ist bereits als ESP-NOW-Sendung eingereiht – kurz warten,
+    // bevor der Funk-Stack abgebaut wird.
+    delay(100);
+
+    WebUpdateService upd;
+    if (!upd.begin(ap, ver)) {
+        Serial.println("[UPD] SoftAP-Start fehlgeschlagen -> Reboot");
+        ESP.restart();
+    }
+    Serial.printf("[UPD] Update-Modus: AP %s, http://%s, %u min\n", ap,
+                  upd.apIp(), minutes);
+
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_7x14B_tf);
+    u8g2.drawStr(0, 14, "UPDATE-MODUS");
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 28, "WLAN:");
+    u8g2.drawStr(36, 28, ap);
+    u8g2.drawStr(0, 40, "http://192.168.4.1");
+    char line[24];
+    snprintf(line, sizeof(line), "FW %s  Timeout %umin", ver, minutes);
+    u8g2.drawStr(0, 52, line);
+    u8g2.sendBuffer();
+
+    const uint32_t deadline = millis() + (uint32_t)minutes * 60000UL;
+    bool ledOn = false;
+    while (true) {
+        upd.loop();
+
+        // Stab pulsiert blau als "im Update-Modus"-Signal
+        const bool on = (millis() / 300) % 2 == 0;
+        if (on != ledOn) {
+            ledOn = on;
+            neopixelSetSolid(on ? strip.Color(0, 0, 200) : 0);
+        }
+
+        if (upd.updateDone()) {
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 63, "OK - Neustart...");
+            u8g2.sendBuffer();
+            delay(1500);  // Antwortseite noch ausliefern lassen
+            ESP.restart();
+        }
+        if (millis() >= deadline && !upd.uploadActive()) {
+            Serial.println("[UPD] Timeout ohne Upload -> Reboot");
+            ESP.restart();
+        }
+        delay(5);
+    }
+}
+
 // ── Selbsttest-Hooks (DEBUG_CMD via Config-Box, siehe NowStation.h) ─────────
 static uint32_t gLaserTestOffMs = 0;   // Auto-Aus fuer den Laser-Testpuls
 
@@ -792,8 +855,8 @@ void setup() {
     if (gNow.begin(&gSettings, playSoundByIndex, (uint8_t)NUM_SOUNDS,
                    applyStationConfig, &kDebugHooks)) {
         const uint8_t* m = gNow.ownMac();
-        Serial.printf("[NOW]  ESP-NOW bereit, ID=%u, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
-            gSettings.stationId, m[0], m[1], m[2], m[3], m[4], m[5]);
+        Serial.printf("[NOW]  ESP-NOW bereit, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
+            m[0], m[1], m[2], m[3], m[4], m[5]);
     } else {
         Serial.println("[NOW]  FEHLER: ESP-NOW-Init fehlgeschlagen!");
     }
@@ -810,9 +873,14 @@ void setup() {
 void loop() {
     bool needRedraw = false;
 
-    // Infinitag Now: RX-Queue abarbeiten (Discovery/Identify/CFG/Hit/Setup)
+    // Infinitag Now: RX-Queue abarbeiten (Discovery/Identify/CFG/Hit/Update)
     gNow.loop();
     if (gNow.consumeDirty()) needRedraw = true;
+
+    // UPDATE_BEGIN empfangen? -> blockierender SoftAP-Update-Modus,
+    // endet immer in ESP.restart().
+    const uint8_t updMin = gNow.consumeUpdateRequest();
+    if (updMin != 0) runUpdateMode(updMin);
 
     // Selbsttest: Laser-Testpuls automatisch beenden
     if (gLaserTestOffMs != 0 && millis() >= gLaserTestOffMs) {
@@ -910,13 +978,7 @@ void loop() {
     // So kann man mit K4 den Sound waehlen und dann mit dem Stab beliebig
     // oft "feuern". Frueher fix DOOR_BANG_WAV, jetzt der ausgewaehlte Sound.
     if (btnPressedEdge(gBtns[4])) {
-      if (gNow.setupActive()) {
-        // SETUP-Modus (Doc 18 § 6.1): Trigger ist Bestaetigungstaster.
-        // Persistiert die angebotene ID, broadcastet SETUP_TAKE, spielt
-        // den Setup-Sound. KEIN IR-Burst, kein normaler Schuss.
-        gNow.confirmSetup();
-        needRedraw = true;
-      } else if (gNow.consumeTriggerTest()) {
+      if (gNow.consumeTriggerTest()) {
         // Selbsttest: Trigger-Test bestanden (Ergebnis geht per Funk an
         // die Config-Box) – kein Schuss ausloesen.
         needRedraw = true;

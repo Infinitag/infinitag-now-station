@@ -5,11 +5,6 @@ using namespace inow;
 // All Infinitag-Now devices are pinned to this WiFi channel (PROTOCOL.md).
 static constexpr uint8_t ESPNOW_CHANNEL = 1;
 
-// Station firmware version, reported in DISCOVER_REPLY.
-static constexpr uint8_t FW_MAJOR = 0;
-static constexpr uint8_t FW_MINOR = 1;
-static constexpr uint8_t FW_PATCH = 0;
-
 bool NowStation::begin(StationSettings *settings, PlayFn playFn,
                        uint8_t numSounds, ConfigChangedFn onConfigChanged,
                        const DebugHooks *hooks) {
@@ -35,6 +30,12 @@ void NowStation::loop() {
   }
 }
 
+uint8_t NowStation::consumeUpdateRequest() {
+  const uint8_t m = _updateReqMin;
+  _updateReqMin = 0;
+  return m;
+}
+
 bool NowStation::consumeTriggerTest() {
   if (_trigTestUntil == 0 || millis() >= _trigTestUntil) return false;
   _trigTestUntil = 0;
@@ -48,7 +49,6 @@ void NowStation::sendDebugResult(const uint8_t mac[6], uint8_t test,
                                  uint8_t result) {
   Packet p;
   init(p, MSG_DEBUG_RESULT, DEV_STATION);
-  p.station_id = _settings->stationId;
   p.payload[0] = test;
   p.payload[1] = result;
   _net.send(mac, p);
@@ -120,16 +120,14 @@ bool NowStation::consumeDirty() {
 
 void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
   DiscoverReply r;
-  r.fw_major = FW_MAJOR;
-  r.fw_minor = FW_MINOR;
-  r.fw_patch = FW_PATCH;
+  r.fw_major = STATION_FW_MAJOR;
+  r.fw_minor = STATION_FW_MINOR;
+  r.fw_patch = STATION_FW_PATCH;
   r.rssi_self = 0;  // RSSI not available via the plain recv callback
   r.uptime_min = (uint16_t)((millis() - _bootMs) / 60000UL);
 
   StationConfig c;
-  c.station_id = _settings->stationId;
   c.volume_pct = _settings->volumePct;
-  c.default_setup_sound = _settings->setupSound;
   c.led_ready = _settings->ledReady;
   c.led_busy = _settings->ledBusy;
   r.config_blob_len = STATION_BLOB_SIZE;
@@ -137,7 +135,6 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
 
   Packet p;
   init(p, MSG_DISCOVER_REPLY, DEV_STATION);
-  p.station_id = _settings->stationId;
   p.token = token;  // echo protection
   encodeDiscoverReply(r, p.payload);
   _net.send(mac, p);
@@ -146,30 +143,8 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
 void NowStation::sendAck(const uint8_t mac[6], uint8_t status) {
   Packet p;
   init(p, MSG_CFG_ACK, DEV_STATION);
-  p.station_id = _settings->stationId;
   p.payload[0] = status;
   _net.send(mac, p);
-}
-
-void NowStation::confirmSetup() {
-  if (!setupActive()) return;
-
-  uint8_t newId = _setupPendingId;
-  if (newId == 0) newId = (_settings->stationId == 0) ? 1 : _settings->stationId;
-
-  _settings->stationId = newId;
-  _settings->save();
-  _setupUntil = 0;
-  _dirty = true;
-
-  Packet p;
-  init(p, MSG_SETUP_TAKE, DEV_STATION);
-  p.station_id = newId;
-  p.payload[0] = newId;
-  _net.sendBroadcast(p);
-
-  Serial.printf("[NOW] Setup bestaetigt: Station-ID = %u\n", newId);
-  if (_play && _settings->setupSound < _numSounds) _play(_settings->setupSound);
 }
 
 void NowStation::handlePacket(const RxPacket &rx) {
@@ -193,24 +168,20 @@ void NowStation::handlePacket(const RxPacket &rx) {
       if (p.device_type != DEV_STATION) break;
       StationConfig c;
       decodeStationConfig(p.payload, STATION_BLOB_SIZE, c);
-      if (c.station_id < 1 || c.station_id > 99 || c.volume_pct > 100 ||
-          c.default_setup_sound >= _numSounds ||
-          c.led_ready > LED_MASK_MAX || c.led_busy > LED_MASK_MAX) {
+      if (c.volume_pct > 100 || c.led_ready > LED_MASK_MAX ||
+          c.led_busy > LED_MASK_MAX) {
         sendAck(rx.mac, ACK_NACK_VALIDATION);
         break;
       }
-      _settings->stationId = c.station_id;
       _settings->volumePct = c.volume_pct;
-      _settings->setupSound = c.default_setup_sound;
       _settings->ledReady = c.led_ready;
       _settings->ledBusy = c.led_busy;
       _settings->save();
       if (_onConfigChanged) _onConfigChanged();
       _dirty = true;
       sendAck(rx.mac, ACK_OK);
-      Serial.printf("[NOW] CFG_WRITE: id=%u vol=%u%% setupSnd=%u ledRdy=0x%X ledBsy=0x%X\n",
-                    c.station_id, c.volume_pct, c.default_setup_sound,
-                    c.led_ready, c.led_busy);
+      Serial.printf("[NOW] CFG_WRITE: vol=%u%% ledRdy=0x%X ledBsy=0x%X\n",
+                    c.volume_pct, c.led_ready, c.led_busy);
       break;
     }
 
@@ -221,37 +192,35 @@ void NowStation::handlePacket(const RxPacket &rx) {
       }
       break;
 
-    case MSG_HIT_REPORT:
-      // Broadcast from a target; only react if it is addressed to our id.
-      if (_settings->stationId != 0 && p.station_id == _settings->stationId &&
-          _play && p.payload[0] < _numSounds) {
-        Serial.printf("[NOW] HIT_REPORT: Target %u -> Sound %u\n", p.target_id,
-                      p.payload[0]);
-        _play(p.payload[0]);
+    case MSG_HIT_REPORT: {
+      // Broadcast from a target; play only if it is addressed to our MAC.
+      uint8_t dest[6];
+      uint8_t sound = 0;
+      decodeHitReport(p.payload, dest, sound);
+      if (memcmp(dest, _net.ownMac(), 6) == 0 && _play && sound < _numSounds) {
+        Serial.printf("[NOW] HIT_REPORT von %02X%02X%02X -> Sound %u\n",
+                      rx.mac[3], rx.mac[4], rx.mac[5], sound);
+        _play(sound);
       }
       break;
+    }
 
-    case MSG_SETUP_BEGIN:
-      // header.station_id = id to assign (0 = keep current), payload[0] = timeout s
-      _setupUntil = millis() + (uint32_t)p.payload[0] * 1000UL;
-      _setupPendingId = p.station_id;
+    case MSG_UPDATE_BEGIN: {
+      // Ack first (the send is queued before we tear ESP-NOW down in main).
+      Packet ack;
+      init(ack, MSG_UPDATE_ACK, DEV_STATION);
+      ack.payload[0] = 0;
+      _net.send(rx.mac, ack);
+      _updateReqMin = p.payload[0] == 0 ? 5 : p.payload[0];
       _dirty = true;
-      Serial.printf("[NOW] SETUP_BEGIN: pending id=%u, timeout=%us\n",
-                    _setupPendingId, p.payload[0]);
+      Serial.printf("[NOW] UPDATE_BEGIN: SoftAP-Update-Modus, %u min\n",
+                    _updateReqMin);
       break;
+    }
 
     case MSG_DEBUG_CMD:
       if (p.device_type == DEV_STATION || p.device_type == DEV_ANY)
         handleDebugCmd(rx);
-      break;
-
-    case MSG_SETUP_TAKE:
-      // Another station confirmed -> leave setup mode silently.
-      if (setupActive()) {
-        _setupUntil = 0;
-        _dirty = true;
-        Serial.println("[NOW] SETUP_TAKE von anderer Station -> IDLE");
-      }
       break;
 
     default:

@@ -1,6 +1,6 @@
-// Device-side Infinitag-Now protocol handling for the station:
-// DISCOVER_REPLY, IDENTIFY, CFG_WRITE/CFG_ACK, SETUP_BEGIN/SETUP_TAKE,
-// CFG_TEST_SOUND and HIT_REPORT. Uses the shared EspNowService from
+// Device-side Infinitag-Now protocol handling for the station (v0x02):
+// DISCOVER_REPLY, IDENTIFY, CFG_WRITE/CFG_ACK, CFG_TEST_SOUND, HIT_REPORT
+// (MAC-routed) and UPDATE_BEGIN. Uses the shared EspNowService from
 // infinitag-now-core. See PROTOCOL.md in that repo.
 
 #pragma once
@@ -9,6 +9,12 @@
 #include "EspNowService.h"
 #include "InfinitagNow.h"
 #include "StationSettings.h"
+
+// Station firmware version, reported in DISCOVER_REPLY and shown on the
+// update page. Bump on every flashed release, the config box compares it.
+static constexpr uint8_t STATION_FW_MAJOR = 0;
+static constexpr uint8_t STATION_FW_MINOR = 2;
+static constexpr uint8_t STATION_FW_PATCH = 0;
 
 // Hardware hooks for the remote self-test (implemented in main.cpp).
 struct DebugHooks {
@@ -33,13 +39,10 @@ class NowStation {
   // True while an IDENTIFY window is running (LED override: white pulse).
   bool identifyActive() const { return millis() < _identifyUntil; }
 
-  // True while SETUP_BEGIN mode is active (LED override: purple, trigger
-  // acts as "confirm" instead of firing).
-  bool setupActive() const { return millis() < _setupUntil; }
-
-  // Trigger pressed while setupActive(): persist the pending id, broadcast
-  // SETUP_TAKE, play the setup sound.
-  void confirmSetup();
+  // UPDATE_BEGIN received: returns the requested timeout in minutes exactly
+  // once, 0 = nothing pending. Caller must then enter the SoftAP update
+  // mode (blocking) and reboot afterwards.
+  uint8_t consumeUpdateRequest();
 
   // Trigger pressed while a DBG_TRIGGER test is armed: reports OK to the
   // config box and returns true (main must then NOT fire a shot).
@@ -70,8 +73,7 @@ class NowStation {
   uint8_t _trigTestMac[6] = {0};
 
   uint32_t _identifyUntil = 0;
-  uint32_t _setupUntil = 0;
-  uint8_t _setupPendingId = 0;  // id offered in SETUP_BEGIN header (0 = keep)
+  uint8_t _updateReqMin = 0;  // pending UPDATE_BEGIN timeout, 0 = none
   uint32_t _bootMs = 0;
   bool _dirty = false;
 };

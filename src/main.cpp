@@ -647,7 +647,15 @@ static void runPushReceiveMode() {
             neopixelSetSolid(on ? strip.Color(0, 0, 200) : 0);
         }
 
-        if (millis() - lastDraw > 500) {
+        // Selten zeichnen: sendBuffer blockiert bei 100-kHz-I2C ~100 ms,
+        // in denen Funk-Frames verloren gehen koennen (Queue puffert nur
+        // begrenzt) - nur bei Prozent-Aenderung, max. 1x/Sekunde.
+        static unsigned lastPct = 255;
+        const size_t totalNow = gPushRx.bytesTotal();
+        const unsigned pct =
+            totalNow ? (unsigned)(gPushRx.bytesDone() * 100 / totalNow) : 0;
+        if (pct != lastPct && millis() - lastDraw > 1000) {
+            lastPct = pct;
             lastDraw = millis();
             u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_7x14B_tf);

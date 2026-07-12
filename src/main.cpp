@@ -38,9 +38,14 @@
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>
 
+#include "FwMarker.h"
 #include "NowStation.h"
 #include "StationSettings.h"
 #include "WebUpdateService.h"
+
+// Firmware identity for the config box's image store (Doc 21 E1).
+INOW_FW_MARKER(inow::DEV_STATION, STATION_FW_MAJOR, STATION_FW_MINOR,
+               STATION_FW_PATCH)
 
 // ── Pins: Audio ──────────────────────────────────────────────────────────────
 #define I2S_BCLK     15

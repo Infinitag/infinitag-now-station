@@ -665,6 +665,12 @@ static void runUpdateMode(uint8_t minutes) {
     WebUpdateService upd;
     if (!upd.begin(ap, ver)) {
         Serial.println("[UPD] SoftAP-Start fehlgeschlagen -> Reboot");
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_7x14B_tf);
+        u8g2.drawStr(0, 26, "AP-Fehler");
+        u8g2.drawStr(0, 44, "Neustart...");
+        u8g2.sendBuffer();
+        delay(800);
         ESP.restart();
     }
     Serial.printf("[UPD] Update-Modus: AP %s, http://%s, %u min\n", ap,
@@ -702,7 +708,14 @@ static void runUpdateMode(uint8_t minutes) {
             ESP.restart();
         }
         if (millis() >= deadline && !upd.uploadActive()) {
+            // Final frame before restarting: the OLED keeps showing the
+            // last buffer across ESP.restart(), without this you cannot
+            // tell that the reboot happened.
             Serial.println("[UPD] Timeout ohne Upload -> Reboot");
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 63, "Timeout-Neustart");
+            u8g2.sendBuffer();
+            delay(800);
             ESP.restart();
         }
         delay(5);

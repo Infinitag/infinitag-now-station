@@ -38,6 +38,7 @@
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>
 
+#include "EspNowPush.h"
 #include "FwMarker.h"
 #include "NowStation.h"
 #include "StationSettings.h"
@@ -233,6 +234,9 @@ static bool       gLaserOn     = false;
 // ── Infinitag Now: persistente Config + ESP-NOW-Gerätelogik ─────────────────
 static StationSettings gSettings;
 static NowStation      gNow;
+static EspNowPushReceiver gPushRx;   // ESP-NOW-Funk-Update (Doc 21 E3)
+
+static void pushControlBridge(const RxPacket& rx) { gPushRx.onControl(rx); }
 
 void drawDisplay() {
     // Display ist 128 x 64 Pixel.
@@ -622,6 +626,63 @@ static void applyStationConfig() {
     gVolume = VOLUME_MAX * ((float)gSettings.volumePct / 100.0f);
 }
 
+// ── ESP-NOW-Funk-Update (PUSH_BEGIN via Config-Box, Doc 21 E3) ──────────────
+// Blockierender Empfangsmodus: die Box schiebt die Firmware in rohen
+// 250-Byte-Frames; Fortschritt auf dem OLED, Stab pulsiert blau. Endet
+// bei Erfolg im Reboot in die neue Firmware, bei Fehler/Funkstille im
+// Reboot in die alte (halber Empfang kann nicht booten).
+static void runPushReceiveMode() {
+    Serial.println("[PUSH] Funk-Update beginnt");
+    bool ledOn = false;
+    uint32_t lastDraw = 0;
+
+    while (true) {
+        gNow.loop();      // Steuerpakete (BEGIN/END) -> gPushRx.onControl
+        gPushRx.loop();   // Frames flashen, ACKs senden
+
+        const bool on = (millis() / 300) % 2 == 0;
+        if (on != ledOn) {
+            ledOn = on;
+            neopixelSetSolid(on ? strip.Color(0, 0, 200) : 0);
+        }
+
+        if (millis() - lastDraw > 500) {
+            lastDraw = millis();
+            u8g2.clearBuffer();
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 14, "FUNK-UPDATE");
+            u8g2.setFont(u8g2_font_6x10_tf);
+            char line[24];
+            const size_t total = gPushRx.bytesTotal();
+            snprintf(line, sizeof(line), "%u%% (%u/%u KB)",
+                     total ? (unsigned)(gPushRx.bytesDone() * 100 / total) : 0,
+                     (unsigned)(gPushRx.bytesDone() / 1024),
+                     (unsigned)(total / 1024));
+            u8g2.drawStr(0, 32, line);
+            u8g2.drawStr(0, 46, "Nicht ausschalten!");
+            u8g2.sendBuffer();
+        }
+
+        if (gPushRx.state() == EspNowPushReceiver::DONE) {
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 63, "OK - Neustart...");
+            u8g2.sendBuffer();
+            delay(500);
+            ESP.restart();
+        }
+        if (gPushRx.state() == EspNowPushReceiver::FAILED ||
+            gPushRx.idleMs() > 30000) {
+            Serial.println("[PUSH] Abbruch/Funkstille -> Reboot (alte FW)");
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 63, "Fehler-Neustart");
+            u8g2.sendBuffer();
+            delay(800);
+            ESP.restart();
+        }
+        delay(2);
+    }
+}
+
 // ── SoftAP-Firmware-Update (UPDATE_BEGIN via Config-Box) ────────────────────
 // Blockierender Modus: ESP-NOW wird beendet, offener AP + Upload-Seite
 // (geteiltes WebUpdateService-Modul aus infinitag-now-core). Endet IMMER
@@ -848,6 +909,8 @@ void setup() {
     applyStationConfig();
     if (gNow.begin(&gSettings, playSoundByIndex, (uint8_t)NUM_SOUNDS,
                    applyStationConfig, &kDebugHooks)) {
+        gPushRx.begin(gNow.net());
+        gNow.setPushHandler(pushControlBridge);
         const uint8_t* m = gNow.ownMac();
         Serial.printf("[NOW]  ESP-NOW bereit, MAC %02X:%02X:%02X:%02X:%02X:%02X\n",
             m[0], m[1], m[2], m[3], m[4], m[5]);
@@ -875,6 +938,9 @@ void loop() {
     // endet immer in ESP.restart().
     const uint8_t updMin = gNow.consumeUpdateRequest();
     if (updMin != 0) runUpdateMode(updMin);
+
+    // PUSH_BEGIN empfangen? -> blockierender Funk-Update-Modus.
+    if (gPushRx.active()) runPushReceiveMode();
 
     // Selbsttest: Laser-Testpuls automatisch beenden
     if (gLaserTestOffMs != 0 && millis() >= gLaserTestOffMs) {

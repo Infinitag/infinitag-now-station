@@ -34,6 +34,7 @@
 #include <Arduino.h>
 #include "driver/i2s.h"
 #include <LittleFS.h>
+#include <Update.h>
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Adafruit_NeoPixel.h>
@@ -260,7 +261,11 @@ void drawDisplay() {
     u8g2.setFont(u8g2_font_6x10_tf);
     char hdr[24];
     const uint8_t* hm = gNow.ownMac();
-    snprintf(hdr, sizeof(hdr), "Station V2   %02X%02X%02X", hm[3], hm[4], hm[5]);
+#ifndef DEV_TAG
+#define DEV_TAG "V2"
+#endif
+    snprintf(hdr, sizeof(hdr), "Station %s   %02X%02X%02X", DEV_TAG,
+             hm[3], hm[4], hm[5]);
     u8g2.drawStr(0, 8, hdr);
     u8g2.drawHLine(0, 10, 128);
 
@@ -647,7 +652,15 @@ static void runPushReceiveMode() {
             neopixelSetSolid(on ? strip.Color(0, 0, 200) : 0);
         }
 
-        if (millis() - lastDraw > 500) {
+        // Selten zeichnen: sendBuffer blockiert bei 100-kHz-I2C ~100 ms,
+        // in denen Funk-Frames verloren gehen koennen (Queue puffert nur
+        // begrenzt) - nur bei Prozent-Aenderung, max. 1x/Sekunde.
+        static unsigned lastPct = 255;
+        const size_t totalNow = gPushRx.bytesTotal();
+        const unsigned pct =
+            totalNow ? (unsigned)(gPushRx.bytesDone() * 100 / totalNow) : 0;
+        if (pct != lastPct && millis() - lastDraw > 1000) {
+            lastPct = pct;
             lastDraw = millis();
             u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_7x14B_tf);
@@ -673,11 +686,27 @@ static void runPushReceiveMode() {
         }
         if (gPushRx.state() == EspNowPushReceiver::FAILED ||
             gPushRx.idleMs() > 30000) {
-            Serial.println("[PUSH] Abbruch/Funkstille -> Reboot (alte FW)");
+            const char* why;
+            switch (gPushRx.failCode()) {
+                case inow::PUSH_ACK_FINAL_CRC:   why = "CRC-Fehler"; break;
+                case inow::PUSH_ACK_FINAL_FLASH: why = "Flash-Fehler"; break;
+                default:                         why = "Funkstille"; break;
+            }
+            Serial.printf("[PUSH] Abbruch (%s / Update-Err %u: %s)\n", why,
+                          Update.getError(), Update.errorString());
+            u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 63, "Fehler-Neustart");
+            u8g2.drawStr(0, 26, "Update-Fehler:");
+            u8g2.drawStr(0, 44, why);
+            u8g2.setFont(u8g2_font_6x10_tf);
+            // Detailgrund der Update-Lib (z. B. "Could Not Activate...")
+            char detail[32];
+            snprintf(detail, sizeof(detail), "#%u %s", Update.getError(),
+                     Update.errorString());
+            u8g2.drawStr(0, 54, detail);
+            u8g2.drawStr(0, 63, "Neustart mit alter FW...");
             u8g2.sendBuffer();
-            delay(800);
+            delay(6000);   // lange genug zum Ablesen
             ESP.restart();
         }
         delay(2);

@@ -261,7 +261,11 @@ void drawDisplay() {
     u8g2.setFont(u8g2_font_6x10_tf);
     char hdr[24];
     const uint8_t* hm = gNow.ownMac();
-    snprintf(hdr, sizeof(hdr), "Station V2   %02X%02X%02X", hm[3], hm[4], hm[5]);
+#ifndef DEV_TAG
+#define DEV_TAG "V2"
+#endif
+    snprintf(hdr, sizeof(hdr), "Station %s   %02X%02X%02X", DEV_TAG,
+             hm[3], hm[4], hm[5]);
     u8g2.drawStr(0, 8, hdr);
     u8g2.drawHLine(0, 10, 128);
 

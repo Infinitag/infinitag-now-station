@@ -26,6 +26,10 @@ a:hover{color:#79C8B4}
 .wm i{font-style:normal;color:#939598}
 .wm em{font-style:normal;color:#4db3a2}
 .sub{font-size:11px;color:#8a9092;letter-spacing:1px;margin-top:2px}
+.nav{display:flex;border-bottom:1px solid #23282a;padding:0 16px;flex-wrap:wrap}
+.nav a{padding:10px 14px;font-size:13px;color:#8a9092}
+.nav a:hover{color:#e8eaea}
+.nav a.on{color:#fff;font-weight:700;border-bottom:2px solid #03817D;margin-bottom:-1px}
 .bd{padding:6px 28px 28px}
 .sec{border-top:2px solid #333c3f;margin-top:28px;padding-top:22px}
 .sec:first-child{border:0;margin-top:0;padding-top:16px}
@@ -49,13 +53,14 @@ button:hover{background:#0d8c80;color:#fff}
 <div class="wrap">
 <div class="card">
 <div class="bar"></div>
-<div class="hdr">
+<div class="hdr" style="border:0">
 <svg width="46" height="24" viewBox="0 0 64 32" fill="none"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#79C8B4"/><stop offset="1" stop-color="#03817D"/></linearGradient></defs><polygon points="32,16 25,3.9 11,3.9 4,16 11,28.1 25,28.1" stroke="url(#g)" stroke-width="4"/><polygon points="60,16 53,3.9 39,3.9 32,16 39,28.1 53,28.1" stroke="url(#g)" stroke-width="4"/></svg>
 <div>
 <div class="wm"><i>INFINI</i><b>TAG</b> <em>NOW</em></div>
 <div class="sub">STATION &middot; %DEVICE_ID%</div>
 </div>
 </div>
+<div class="nav"><a class="on" href="/">Update</a></div>
 <div class="bd">
 
 <form class="sec" method="POST" action="/update" enctype="multipart/form-data">

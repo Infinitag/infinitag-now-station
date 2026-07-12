@@ -45,6 +45,8 @@ BIN="$HOME/.pio-workspaces/infinitag-now-station/build/esp32-s3-devkitc-1/firmwa
 [[ -f "$BIN" ]] || { echo "FEHLER: firmware.bin nicht gefunden." >&2; exit 1; }
 mkdir -p dist
 cp "$BIN" "dist/$ASSET"
+# CRC32-Beilage: die Box verifiziert damit ihre Internet-Downloads
+python3 -c "import zlib;d=open('dist/$ASSET','rb').read();print('%08X %d'%(zlib.crc32(d)&0xffffffff,len(d)))" > "dist/$ASSET.crc32"
 
 # --- Taggen, pushen, Release ---------------------------------------------------
 # Release-Notes generiert GitHub aus den gemergten PRs seit dem letzten Tag,
@@ -57,7 +59,7 @@ git push origin main --tags
 # Skripts (Tag-auf-HEAD wird oben erkannt und uebersprungen).
 created=""
 for attempt in 1 2 3; do
-  if gh release create "$VER" "dist/$ASSET" \
+  if gh release create "$VER" "dist/$ASSET" "dist/$ASSET.crc32" \
        --title "Station $VER" \
        --generate-notes \
        --notes "**Installation:** Config-Box → Geraete-Menue → Update (OTA), dann \`${ASSET}\` auf http://192.168.4.1 hochladen."; then

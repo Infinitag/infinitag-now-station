@@ -141,43 +141,16 @@ static       float VOLUME_MAX  = 0.65f;     // wird in setup() aus SPEAKER befue
 static       float VOLUME_STEP = 0.10f;     // dito (10 % von VOLUME_MAX)
 static       float gVolume     = 0.05f;     // Start: sehr leise
 
-// ── Test-WAVs (Dateien liegen unter data/, kommen per uploadfs) ──────────────
-// Statt zweier fester Konstanten gibt es jetzt eine Liste – K4 cycelt durch
-// die Liste und spielt den jeweils ausgewaehlten Sound ab. Der Stab-Trigger
-// (GPIO 4) feuert ebenfalls den aktuell ausgewaehlten Sound.
-//
-// shortName: <= 11 Zeichen → passt mit Index-Praefix in eine 128-px-Zeile
-//            bei u8g2_font_6x10_tf (s.u. drawDisplay()).
-struct SoundEntry {
-    const char* path;
-    const char* shortName;
-};
-static const SoundEntry SOUNDS[] = {
-    { "/01_test.wav",             "Test"        },
-    { "/02_door_bang.wav",        "Door Bang"   },
-    { "/03_boo_and_laugh.wav",    "Boo+Laugh"   },
-    { "/04_bubbles.wav",          "Bubbles"     },
-    { "/05_cat_meow.wav",         "Cat Meow"    },
-    { "/06_daemon_kinderliebe.wav", "Daemon"    },
-    { "/07_gears.wav",            "Gears"       },
-    { "/08_little_girl.wav",      "LittleGirl"  },
-    { "/09_owl_hooting.wav",      "Owl"         },
-    { "/10_psycho_sound.wav",     "Psycho"      },
-    { "/11_scary_clock.wav",      "ScaryClock"  },
-    { "/12_spooky_skeleton.wav",  "Skeleton"    },
-    { "/13_werewolf.wav",         "Werewolf"    },
-    { "/14_werewolf_growl.wav",   "WerewolfGr"  },
-    { "/15_witch.wav",            "Witch"       },
-};
-static const size_t NUM_SOUNDS = sizeof(SOUNDS) / sizeof(SOUNDS[0]);
+// ── Sounds (Dateien liegen lokal unter data/, kommen per uploadfs) ───────────
+// Die Liste der Sounds (ID -> Dateipfad + Anzeigename) kommt zentral aus
+// dem Core-Repo (SoundCatalog.h) – dieselbe Quelle nutzt die Config-Box
+// fuer die Anzeigenamen. Eigene Sounds hinzufuegen: siehe data/README.md.
+#include "SoundCatalog.h"
+static constexpr const inow::SoundInfo* SOUNDS = inow::SOUND_CATALOG;
+static constexpr size_t NUM_SOUNDS = inow::SOUND_COUNT;
 
 // Aktuell ausgewaehlter Sound. K4 cyclet diesen Wert (mod NUM_SOUNDS).
 static size_t gSoundIdx = 0;
-
-// Zur Lesbarkeit: aliasse fuer die "klassischen" Test-Sounds, falls aelterer
-// Code-Pfad sie noch namentlich braucht. Aktuell genutzt: nur im Boot-Log.
-static const char* TEST_WAV      = SOUNDS[0].path;   // /01_test.wav
-static const char* DOOR_BANG_WAV = SOUNDS[1].path;   // /02_door_bang.wav
 
 // ── WAV-Header (Standard RIFF, ohne Extra-Chunks) ────────────────────────────
 struct WavHeader {
@@ -323,7 +296,7 @@ void drawDisplay() {
     // Format: "S04:Bubbles" – bei 6x10 Font ca. 11 Zeichen, ~66 px
     // breit → laesst rechts genug Platz fuer die IR-Status-Box.
     snprintf(buf, sizeof(buf), "S%02u:%s",
-        (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].shortName);
+        (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].name);
     u8g2.drawStr(0, 49, buf);
     if (gIrCount > 0) {
         // 9x9 Box rechts in der gleichen Zeile, Baseline 49
@@ -629,7 +602,7 @@ static void playSoundByIndex(uint8_t idx) {
     gPlayState = PLAYING;
     drawDisplay();
     updateStatusLed();          // busy-Farbe VOR dem blockierenden playWav
-    playWav(SOUNDS[idx].path);
+    playWav(SOUNDS[idx].file);
     gPlayCount++;
     gLastPlayMs = millis();
     gPlayState  = prev;
@@ -858,10 +831,10 @@ void setup() {
     Serial.printf("[SND]  %u Sounds in Liste:\n", (unsigned)NUM_SOUNDS);
     for (size_t i = 0; i < NUM_SOUNDS; ++i) {
         Serial.printf("[SND]    [%2u] %-12s  %s\n",
-            (unsigned)(i + 1), SOUNDS[i].shortName, SOUNDS[i].path);
+            (unsigned)(i + 1), SOUNDS[i].name, SOUNDS[i].file);
     }
     Serial.printf("[SND]  Aktuell ausgewaehlt: [%u] %s\n",
-        (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].shortName);
+        (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].name);
 
     // Infinitag Now: persistente Config laden, anwenden, Funk starten.
     // WICHTIG: nach LittleFS/I2S, damit ein frueh eintreffendes CFG/Test-
@@ -937,7 +910,7 @@ void loop() {
         gSoundIdx = (gSoundIdx + 1) % NUM_SOUNDS;
         Serial.printf("[K2] Sound -> [%u/%u] %s (%s)\n",
             (unsigned)(gSoundIdx + 1), (unsigned)NUM_SOUNDS,
-            SOUNDS[gSoundIdx].shortName, SOUNDS[gSoundIdx].path);
+            SOUNDS[gSoundIdx].name, SOUNDS[gSoundIdx].file);
         needRedraw = true;
     }
 
@@ -968,13 +941,13 @@ void loop() {
     // auch ohne Stab den Klang gegen-pruefen kann.
     if (btnPressedEdge(gBtns[3])) {
         Serial.printf("[K4] Vorhoeren: %s @ Vol %.2f\n",
-            SOUNDS[gSoundIdx].shortName, gVolume);
+            SOUNDS[gSoundIdx].name, gVolume);
         PlayState prev = gPlayState;
         gPlayState = PLAYING;
         drawDisplay();          // Status sofort sichtbar
         updateStatusLed();      // busy-Farbe VOR dem blockierenden playWav
 
-        playWav(SOUNDS[gSoundIdx].path);
+        playWav(SOUNDS[gSoundIdx].file);
 
         gPlayCount++;
         gLastPlayMs = millis();
@@ -1000,14 +973,14 @@ void loop() {
         needRedraw = true;
       } else {
         Serial.printf("[TRIG] Trigger ausgeloest (Trig #%lu) – IR + Sound %s\n",
-            (unsigned long)(gTrigCount + 1), SOUNDS[gSoundIdx].shortName);
+            (unsigned long)(gTrigCount + 1), SOUNDS[gSoundIdx].name);
         PlayState prev = gPlayState;
         gPlayState = PLAYING;
         drawDisplay();
         updateStatusLed();      // busy-Farbe VOR dem blockierenden playWav
 
         sendIrBurst(1);
-        playWav(SOUNDS[gSoundIdx].path);
+        playWav(SOUNDS[gSoundIdx].file);
 
         gPlayCount++;
         gTrigCount++;

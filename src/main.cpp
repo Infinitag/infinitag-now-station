@@ -42,6 +42,7 @@
 #include "FwMarker.h"
 #include "NowStation.h"
 #include "StationSettings.h"
+#include "WebPage.h"
 #include "WebUpdateService.h"
 
 // Firmware identity for the config box's image store (Doc 21 E1).
@@ -704,7 +705,18 @@ static void runUpdateMode(uint8_t minutes) {
     char label[24];
     snprintf(label, sizeof(label), "Station %02X%02X%02X", m[3], m[4], m[5]);
 
+    // Design-Seite mit gefuellten Platzhaltern (bleibt fuer die gesamte
+    // Update-Modus-Laufzeit am Leben, der Modus endet im Reboot).
+    char mac[7];
+    snprintf(mac, sizeof(mac), "%02X%02X%02X", m[3], m[4], m[5]);
+    char verV[16];
+    snprintf(verV, sizeof(verV), "v%s", ver);
+    String page = WEB_PAGE_TEMPLATE;
+    page.replace("%DEVICE_ID%", mac);
+    page.replace("%VERSION%", verV);
+
     WebUpdateService upd;
+    upd.setCustomPage(page.c_str());
     if (!upd.begin(ap, ver, label, "infinitag-station")) {
         Serial.println("[UPD] SoftAP-Start fehlgeschlagen -> Reboot");
         u8g2.clearBuffer();

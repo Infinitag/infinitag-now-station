@@ -39,6 +39,14 @@ class NowStation {
   // True while an IDENTIFY window is running (LED override: white pulse).
   bool identifyActive() const { return millis() < _identifyUntil; }
 
+  // Access for the ESP-NOW push receiver (raw-frame hook + acks).
+  EspNowService *net() { return &_net; }
+
+  // PUSH_BEGIN/PUSH_END control packets are forwarded here (set by main;
+  // bridges to the EspNowPushReceiver).
+  using PushControlFn = void (*)(const RxPacket &rx);
+  void setPushHandler(PushControlFn fn) { _onPush = fn; }
+
   // UPDATE_BEGIN received: returns the requested timeout in minutes exactly
   // once, 0 = nothing pending. Caller must then enter the SoftAP update
   // mode (blocking) and reboot afterwards.
@@ -67,6 +75,7 @@ class NowStation {
   uint8_t _numSounds = 0;
 
   const DebugHooks *_hooks = nullptr;
+  PushControlFn _onPush = nullptr;
 
   // armed DBG_TRIGGER test
   uint32_t _trigTestUntil = 0;

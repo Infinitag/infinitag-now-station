@@ -223,6 +223,11 @@ void NowStation::handlePacket(const RxPacket &rx) {
         handleDebugCmd(rx);
       break;
 
+    case MSG_PUSH_BEGIN:
+    case MSG_PUSH_END:
+      if (_onPush) _onPush(rx);
+      break;
+
     default:
       break;
   }

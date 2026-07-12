@@ -14,7 +14,7 @@
 // update page. Bump on every flashed release, the config box compares it.
 static constexpr uint8_t STATION_FW_MAJOR = 0;
 static constexpr uint8_t STATION_FW_MINOR = 2;
-static constexpr uint8_t STATION_FW_PATCH = 1;
+static constexpr uint8_t STATION_FW_PATCH = 2;
 
 // Hardware hooks for the remote self-test (implemented in main.cpp).
 struct DebugHooks {

@@ -2,3 +2,4 @@
 .vscode/
 .smbdelete*
 dist/
+data/*.wav

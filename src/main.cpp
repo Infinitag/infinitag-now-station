@@ -681,11 +681,21 @@ static void runPushReceiveMode() {
         }
         if (gPushRx.state() == EspNowPushReceiver::FAILED ||
             gPushRx.idleMs() > 30000) {
-            Serial.println("[PUSH] Abbruch/Funkstille -> Reboot (alte FW)");
+            const char* why;
+            switch (gPushRx.failCode()) {
+                case inow::PUSH_ACK_FINAL_CRC:   why = "CRC-Fehler"; break;
+                case inow::PUSH_ACK_FINAL_FLASH: why = "Flash-Fehler"; break;
+                default:                         why = "Funkstille"; break;
+            }
+            Serial.printf("[PUSH] Abbruch (%s) -> Reboot (alte FW)\n", why);
+            u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 63, "Fehler-Neustart");
+            u8g2.drawStr(0, 26, "Update-Fehler:");
+            u8g2.drawStr(0, 44, why);
+            u8g2.setFont(u8g2_font_6x10_tf);
+            u8g2.drawStr(0, 62, "Neustart mit alter FW...");
             u8g2.sendBuffer();
-            delay(800);
+            delay(4000);   // lange genug zum Ablesen
             ESP.restart();
         }
         delay(2);

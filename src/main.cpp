@@ -662,8 +662,11 @@ static void runUpdateMode(uint8_t minutes) {
     // bevor der Funk-Stack abgebaut wird.
     delay(100);
 
+    char label[24];
+    snprintf(label, sizeof(label), "Station %02X%02X%02X", m[3], m[4], m[5]);
+
     WebUpdateService upd;
-    if (!upd.begin(ap, ver)) {
+    if (!upd.begin(ap, ver, label, "infinitag-station")) {
         Serial.println("[UPD] SoftAP-Start fehlgeschlagen -> Reboot");
         u8g2.clearBuffer();
         u8g2.setFont(u8g2_font_7x14B_tf);

@@ -60,8 +60,17 @@ Wichtige Verhaltensregeln aus dem Bring-up (nicht kaputt machen):
   Target-Firmware (`infinitag-now-target`) für HIT_REPORT-Tests.
 - Sound-Indizes sind 0-basiert (0..14); die Config-Box begrenzt aktuell
   hart auf 0..13 (`SOUND_ID_MAX`) – offener Punkt.
-- FW-Version (`STATION_FW_*` in `NowStation.h`) bei JEDEM geflashten
-  Stand hochzählen – der Versions-Check der Config-Box vergleicht sie.
+## Firmware-Versionen & Releases (seit 2026-07-12)
+
+- **Versionen entstehen BEWUSST, nie automatisch.** Claude zählt
+  `STATION_FW_*` in `src/NowStation.h` NICHT eigenmächtig bei Änderungen
+  hoch, sondern schlägt vor, wenn ein Stand release-würdig ist, und
+  fragt nach. Zwischenstände beim Basteln behalten die Version (der
+  Versions-Check der Config-Box zeigt dann Gleichstand – bewusst so).
+- **Release-Prozess:** Version in `NowStation.h` erhöhen → committen →
+  `bash release.sh`. Das Skript baut, taggt `vX.Y.Z`, pusht und erstellt
+  ein **GitHub-Release mit `infinitag-station-vX.Y.Z.bin` als Download**
+  – zu jeder Version liegt so die passende Firmware-Datei bereit.
 
 ## Lizenz
 

@@ -44,6 +44,7 @@
 #include <Adafruit_NeoPixel.h>
 
 #include "EspNowPush.h"
+#include "ShotSound.h"
 #include "FwMarker.h"
 #include "NowStation.h"
 #include "StationSettings.h"
@@ -636,6 +637,35 @@ void playWav(const char* path) {
     Serial.println("[WAV] Fertig.");
 }
 
+// ── Schuss-Sound (im Flash eingebettet, siehe ShotSound.h) ──────────────────
+// Gleiche XSMT-/Volume-Behandlung wie playWav(), aber Quelle ist das
+// PROGMEM-Array - kein LittleFS noetig. Blockiert ~0,73 s.
+void playShotSound() {
+    delay(5);
+    digitalWrite(XSMT_PIN, HIGH);
+    delay(10);
+
+    const size_t BUF = 2048;
+    uint8_t buf[BUF];
+    size_t pos = 0, written = 0;
+    while (pos < SHOT_SOUND_BYTES) {
+        const size_t n =
+            (SHOT_SOUND_BYTES - pos) < BUF ? (SHOT_SOUND_BYTES - pos) : BUF;
+        memcpy_P(buf, SHOT_SOUND_PCM + pos, n);
+        int16_t* samples = (int16_t*)buf;
+        const int count = (int)(n / 2);
+        for (int i = 0; i < count; i++) {
+            samples[i] = (int16_t)(samples[i] * gVolume);
+        }
+        i2s_write(I2S_PORT, buf, n, &written, portMAX_DELAY);
+        pos += n;
+    }
+
+    i2s_zero_dma_buffer(I2S_PORT);
+    delay(5);
+    digitalWrite(XSMT_PIN, LOW);
+}
+
 // ── Infinitag Now: Helfer ────────────────────────────────────────────────────
 // Spielt einen Sound per 0-basiertem Index (fuer ESP-NOW-Handler: Test-Sound,
 // HIT_REPORT, Setup-Bestaetigung). Gleiches PlayState-Handling wie K4.
@@ -1211,6 +1241,16 @@ void loop() {
         sendIrBurst(IR_SHOT_MS);
         gShotFlashUntil = millis() + SHOT_FLASH_MS;
         updateStatusLed();      // Weiss-Blitz sofort sichtbar
+        // Zauber-Sound zum Schuss (blockiert ~0,73 s; ein waehrenddessen
+        // eintreffender HIT_REPORT wartet im RX-Ring und spielt danach)
+        PlayState prevState = gPlayState;
+        gPlayState = PLAYING;
+        drawDisplay();
+        playShotSound();
+        gPlayCount++;
+        gPlayState = prevState;
+        if (prevState == IDLE_STREAM) digitalWrite(XSMT_PIN, HIGH);
+        updateStatusLed();
         needRedraw = true;
       }
     }

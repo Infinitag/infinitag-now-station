@@ -313,8 +313,7 @@ void drawDisplay() {
     // + Plays/Trigger/IR-Counter, kompakt in einer Zeile.
     u8g2.setFont(u8g2_font_6x10_tf);
     char buf[32];
-    int volPct = VOLUME_MAX > 0.0f ? (int)((gVolume / VOLUME_MAX) * 100.0f + 0.5f) : 0;
-    snprintf(buf, sizeof(buf), "V:%d%%", volPct);
+    snprintf(buf, sizeof(buf), "V:%u%%", gSettings.volumePct);
     u8g2.drawStr(0, 38, buf);
 
     // Counter: P=Plays, T=Trigger, I=IR-Bursts. Hinter I noch ein
@@ -703,7 +702,18 @@ static void playSoundByIndex(uint8_t idx) {
 // Wendet die persistente Config auf die Laufzeit-Variablen an (Volume in %
 // des Speaker-Limits). Wird nach Boot und nach jedem CFG_WRITE gerufen.
 static void applyStationConfig() {
-    gVolume = VOLUME_MAX * ((float)gSettings.volumePct / 100.0f);
+    // Perzeptive Lautstaerke (dB-linear, 40 dB Bereich): 1 % = 0,4 dB.
+    // Die Kette (PCM5102A -> TPA3110 an 12 V) ist so laut, dass eine
+    // amplituden-lineare Skala alle sinnvollen Zimmerpegel in 0..5 %
+    // quetschte (2 % linear = -34 dB = deutlich hoerbar). Jetzt:
+    // 100 % = VOLUME_MAX, 50 % = -20 dB, 1 % = -39,6 dB, 0 % = stumm.
+    if (gSettings.volumePct == 0) {
+        gVolume = 0.0f;
+        return;
+    }
+    const uint8_t pct = gSettings.volumePct > 100 ? 100 : gSettings.volumePct;
+    const float db = ((float)pct - 100.0f) * 0.40f;
+    gVolume = VOLUME_MAX * powf(10.0f, db / 20.0f);
 }
 
 // ── ESP-NOW-Funk-Update (PUSH_BEGIN via Config-Box, Doc 21 E3) ──────────────
@@ -1163,11 +1173,13 @@ void loop() {
     // K1: Volume cyclen (+VOLUME_STEP, am Maximum zurueck zu VOLUME_MIN).
     // Wir cyclen mit etwas Toleranz, sonst rechnet Float-Addition vorbei.
     if (btnPressedEdge(gBtns[0])) {
-        gVolume += VOLUME_STEP;
-        if (gVolume > VOLUME_MAX + 0.001f) gVolume = VOLUME_MIN;
-        Serial.printf("[K1] Volume -> %.2f (%d %% des Speaker-Limits)\n",
-            gVolume, VOLUME_MAX > 0.0f
-                ? (int)((gVolume / VOLUME_MAX) * 100.0f + 0.5f) : 0);
+        // Prozent in 10er-Schritten cyclen, durch dieselbe dB-Kurve wie
+        // die Funk-Config (nur Laufzeit, nicht persistiert).
+        gSettings.volumePct =
+            gSettings.volumePct >= 100 ? 0 : gSettings.volumePct + 10;
+        applyStationConfig();
+        Serial.printf("[K1] Volume -> %u %% (gVolume %.4f)\n",
+            gSettings.volumePct, gVolume);
         needRedraw = true;
     }
 

@@ -10,6 +10,8 @@ struct StationSettings {
   uint8_t volumePct = 50;   // 0..100, percent of the speaker-safe volume limit
   uint8_t ledReady = 0x02;  // wand LED mask "ready" (bit0=R,1=G,2=B,3=W), default green
   uint8_t ledBusy = 0x01;   // wand LED mask "busy" (audio playing), default red
+  uint8_t laserMode = 3;    // inow::LaserMode: 1=off, 2=on, 3=afterglow (default)
+  uint8_t laserGlow = 1;    // afterglow in 500-ms steps (mode 3), default 500 ms
 
   void load();
   void save() const;

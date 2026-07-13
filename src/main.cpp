@@ -242,6 +242,8 @@ static PlayState  gPlayState   = READY;
 static uint32_t   gLastPlayMs  = 0;
 static uint32_t   gLastShotMs  = 0;   // letzter Schuss (Cooldown)
 static uint32_t   gCalibUntil  = 0;   // Kalibriermodus aktiv bis (0 = aus)
+static uint32_t   gLaserGlowOffMs = 0;  // Schuss-Nachleuchten aus ab (0 = aus)
+static bool       gLaserManual = false;  // K3-Debug-Override (Laser + IR-PWM)
 static uint32_t   gShotFlashUntil = 0;  // Weiss-Blitz bis (0 = aus)
 static bool       gOledPresent = false;  // I2C-Probe in setup()
 static uint32_t   gPlayCount   = 0;   // alle Sound-Wiedergaben (egal welche Quelle)
@@ -851,9 +853,9 @@ static uint32_t gLaserTestOffMs = 0;   // Auto-Aus fuer den Laser-Testpuls
 static void hookLedTest() { neopixelBootTest(); }
 
 static void hookLaserPulse(uint8_t seconds) {
-    gLaserOn = true;
-    digitalWrite(LASER_PIN, HIGH);
     gLaserTestOffMs = millis() + (uint32_t)seconds * 1000UL;
+    digitalWrite(LASER_PIN, HIGH);   // sofort; laserTask beendet den Puls
+    gLaserOn = true;
 }
 
 static bool hookIrBurst(uint8_t ms) {
@@ -868,16 +870,18 @@ static bool hookIrBurst(uint8_t ms) {
 static void hookCalibrate(bool on, uint8_t minutes) {
     if (on) {
         gCalibUntil = millis() + (uint32_t)minutes * 60000UL;
-        gLaserOn = true;
         gLaserTestOffMs = 0;
-        digitalWrite(LASER_PIN, HIGH);
+        gLaserManual = false;
+        digitalWrite(LASER_PIN, HIGH);   // sofort; laserTask haelt den Zustand
+        gLaserOn = true;
         ledcWrite(IR_LEDC_CHANNEL, 128);
         Serial.printf("[CAL] Kalibriermodus AN (%u min)\n", minutes);
     } else {
         gCalibUntil = 0;
-        gLaserOn = false;
         gLaserTestOffMs = 0;
+        gLaserManual = false;
         digitalWrite(LASER_PIN, LOW);
+        gLaserOn = false;
         ledcWrite(IR_LEDC_CHANNEL, 0);
         Serial.println("[CAL] Kalibriermodus AUS");
     }
@@ -885,6 +889,29 @@ static void hookCalibrate(bool on, uint8_t minutes) {
 
 static const DebugHooks kDebugHooks = {hookLedTest, hookLaserPulse,
                                        hookIrBurst, hookCalibrate};
+
+// ── Laser-Steuerung (einziger Pin-Schreiber im Normalbetrieb) ────────────────
+// Prioritaet: Kalibriermodus > DBG_LASER-Testpuls > K3-Override >
+// Config-Modus (dauerhaft an / Schuss-Nachleuchten / aus). Wird jede
+// loop()-Iteration und direkt nach dem Schuss aufgerufen.
+static void laserTask() {
+    bool want = false;
+    if (gCalibUntil != 0) {
+        want = true;                       // Kalibrierung: dauerhaft an
+    } else if (gLaserTestOffMs != 0) {
+        want = millis() < gLaserTestOffMs; // DBG_LASER-Puls
+    } else if (gLaserManual) {
+        want = true;                       // K3-Debug-Override
+    } else if (gSettings.laserMode == inow::LASER_MODE_ON) {
+        want = true;                       // Config: dauerhaft an
+    } else if (gSettings.laserMode == inow::LASER_MODE_GLOW) {
+        want = millis() < gLaserGlowOffMs; // Schuss-Nachleuchten
+    }                                      // LASER_MODE_OFF: bleibt aus
+    if (want != gLaserOn) {
+        gLaserOn = want;
+        digitalWrite(LASER_PIN, want ? HIGH : LOW);
+    }
+}
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
@@ -1060,12 +1087,18 @@ void loop() {
         needRedraw = true;
     }
 
-    // Selbsttest: Laser-Testpuls automatisch beenden
+    // Selbsttest: Laser-Testpuls-Fenster abgelaufen -> Timer loeschen
+    // (den Pin schaltet laserTask)
     if (gLaserTestOffMs != 0 && millis() >= gLaserTestOffMs) {
         gLaserTestOffMs = 0;
-        gLaserOn = false;
-        digitalWrite(LASER_PIN, LOW);
         needRedraw = true;
+    }
+
+    // Laser-Zustand zentral nachfuehren (Config-Modus, Nachleuchten, ...)
+    {
+        const bool prev = gLaserOn;
+        laserTask();
+        if (gLaserOn != prev) needRedraw = true;
     }
 
     // Debug: alle 2 s Roh-Pegel der vier Buttons loggen.
@@ -1110,10 +1143,11 @@ void loop() {
     // sendet – am [BTN-RAW]-Log (TSOP=0 = empfaengt) bzw. per Handy-Kamera.
     // Mit K3 wieder aus. (Die Display-Box I:..+ zaehlt nur Trigger-Bursts.)
     if (btnPressedEdge(gBtns[2]) && gCalibUntil == 0) {  // im Kalibriermodus gesperrt
-        gLaserOn = !gLaserOn;
-        digitalWrite(LASER_PIN, gLaserOn ? HIGH : LOW);
-        ledcWrite(IR_LEDC_CHANNEL, gLaserOn ? IR_DUTY_8BIT : 0);
-        Serial.printf("[K3] Laser + IR-LED %s\n", gLaserOn ? "ON" : "OFF");
+        gLaserManual = !gLaserManual;
+        ledcWrite(IR_LEDC_CHANNEL, gLaserManual ? IR_DUTY_8BIT : 0);
+        laserTask();
+        Serial.printf("[K3] Laser + IR-LED %s (Debug-Override)\n",
+                      gLaserManual ? "ON" : "OFF");
         needRedraw = true;
     }
 
@@ -1167,6 +1201,13 @@ void loop() {
         gTrigCount++;
         Serial.printf("[TRIG] Schuss #%lu (IR %u ms)\n",
             (unsigned long)gTrigCount, (unsigned)IR_SHOT_MS);
+        // Schuss-Laser (Config): Nachleuchten ab jetzt, laserTask schaltet
+        if (gSettings.laserMode == inow::LASER_MODE_GLOW) {
+            gLaserGlowOffMs =
+                millis() + (uint32_t)(gSettings.laserGlow == 0
+                                          ? 1 : gSettings.laserGlow) * 500UL;
+        }
+        laserTask();            // Laser VOR dem Burst an
         sendIrBurst(IR_SHOT_MS);
         gShotFlashUntil = millis() + SHOT_FLASH_MS;
         updateStatusLed();      // Weiss-Blitz sofort sichtbar

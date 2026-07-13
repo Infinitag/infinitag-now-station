@@ -142,6 +142,8 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
   c.volume_pct = _settings->volumePct;
   c.led_ready = _settings->ledReady;
   c.led_busy = _settings->ledBusy;
+  c.laser_mode = _settings->laserMode;
+  c.laser_glow = _settings->laserGlow;
   r.config_blob_len = STATION_BLOB_SIZE;
   encodeStationConfig(c, r.config_blob);
 
@@ -181,19 +183,23 @@ void NowStation::handlePacket(const RxPacket &rx) {
       StationConfig c;
       decodeStationConfig(p.payload, STATION_BLOB_SIZE, c);
       if (c.volume_pct > 100 || c.led_ready > LED_MASK_MAX ||
-          c.led_busy > LED_MASK_MAX) {
+          c.led_busy > LED_MASK_MAX || c.laser_mode > LASER_MODE_GLOW ||
+          c.laser_glow > LASER_GLOW_MAX) {
         sendAck(rx.mac, ACK_NACK_VALIDATION);
         break;
       }
       _settings->volumePct = c.volume_pct;
       _settings->ledReady = c.led_ready;
       _settings->ledBusy = c.led_busy;
+      _settings->laserMode = c.laser_mode;
+      _settings->laserGlow = c.laser_glow == 0 ? 1 : c.laser_glow;
       _settings->save();
       if (_onConfigChanged) _onConfigChanged();
       _dirty = true;
       sendAck(rx.mac, ACK_OK);
-      Serial.printf("[NOW] CFG_WRITE: vol=%u%% ledRdy=0x%X ledBsy=0x%X\n",
-                    c.volume_pct, c.led_ready, c.led_busy);
+      Serial.printf(
+          "[NOW] CFG_WRITE: vol=%u%% ledRdy=0x%X ledBsy=0x%X laser=%u/%u\n",
+          c.volume_pct, c.led_ready, c.led_busy, c.laser_mode, c.laser_glow);
       break;
     }
 

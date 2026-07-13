@@ -1,12 +1,16 @@
 /**
- * Infinitag Station V2 – Test-Sketch mit OLED + 4 Tasten
+ * Infinitag Station V2 – Live-Firmware (Schiessbuden-Betrieb)
  *
- * Zweck dieses Sketches:
- *   Manueller Audio-Test mit Bedien-UI. Tasten K1/K2 cyceln Volume bzw.
- *   Sound, K3 toggelt den Laser, K4 spielt den ausgewählten Sound vor
- *   (ohne IR-Burst). Der Stab-Trigger feuert IR + Sound = realer Schuss.
+ * Spielfluss (Doc 12 §3.7, PROTOCOL.md):
+ *   Stab-Trigger  → IR-Schuss (Burst) + Weiss-Blitz am Stab, KEIN Sound.
+ *   Ziel getroffen → Target broadcastet HIT_REPORT (Ziel-Station-MAC +
+ *   sound_id) → diese Station spielt den gemeldeten Sound (NowStation).
  *
- *   Das ist NICHT der finale Stations-Code, sondern ein Hardware-Bring-up.
+ * Debug-Bedienung (optional, OLED-Modul mit K1..K4 aufsteckbar):
+ *   K1 cycelt Volume, K2 waehlt den Vorhoer-Sound, K3 toggelt Laser+IR,
+ *   K4 spielt den gewaehlten Sound lokal ab (kein IR). Ohne OLED laeuft
+ *   die Station headless; die Fern-Selbsttests (DEBUG_CMD der Config-Box)
+ *   und die Update-Modi (SoftAP + Funk-Push) funktionieren immer.
  *
  * GPIO-Plan v7 (alle in diesem Sketch verwendeten Pins):
  *   GPIO8  → OLED I²C SDA
@@ -70,7 +74,16 @@ INOW_FW_MARKER(inow::DEV_STATION, STATION_FW_MAJOR, STATION_FW_MINOR,
 // Schaltet gegen GND. Auf dem PCB hängt hier später eine Ader vom USB-C-
 // Stab-Connector. Fuer den Bring-up-Test reicht ein Pushbutton zwischen
 // GPIO 4 und GND.
-#define TRIG_PIN      4   // Stab-Trigger → Test-Sound abspielen
+#define TRIG_PIN      4   // Stab-Trigger → IR-Schuss (Live-Betrieb)
+
+// ── Schuss-Verhalten (Live-Betrieb) ─────────────────────────────────────────
+// Burst-Laenge: lang genug fuer eine robuste TSOP-Erkennung am Target,
+// kurz genug fuer schnelles Nachfeuern. Das endgueltige IR-Telegramm
+// (Validierung gegen Fremd-IR) wird mit der Target-Firmware festgelegt –
+// offener Punkt in Doc 11.
+#define IR_SHOT_MS        5     // IR-Burst pro Schuss
+#define SHOT_COOLDOWN_MS  250   // fruehester Folgeschuss danach
+#define SHOT_FLASH_MS     150   // Weiss-Blitz am Stab ("Schuss abgegeben")
 
 // ── Pin: Laser-Treiber (active-HIGH) ────────────────────────────────────────
 // GPIO 7 → 820 Ω → Base BC546C; Emitter → GND; Collector → Laser−; Laser+ → 5 V.
@@ -227,6 +240,9 @@ bool btnPressedEdge(Button& b) {
 enum PlayState : uint8_t { READY, IDLE_STREAM, PLAYING };
 static PlayState  gPlayState   = READY;
 static uint32_t   gLastPlayMs  = 0;
+static uint32_t   gLastShotMs  = 0;   // letzter Schuss (Cooldown)
+static uint32_t   gShotFlashUntil = 0;  // Weiss-Blitz bis (0 = aus)
+static bool       gOledPresent = false;  // I2C-Probe in setup()
 static uint32_t   gPlayCount   = 0;   // alle Sound-Wiedergaben (egal welche Quelle)
 static uint32_t   gTrigCount   = 0;   // nur ueber den Stab-Trigger (GPIO 4)
 static uint32_t   gIrCount     = 0;   // gesendete IR-Bursts
@@ -241,6 +257,7 @@ static EspNowPushReceiver gPushRx;   // ESP-NOW-Funk-Update (Doc 21 E3)
 static void pushControlBridge(const RxPacket& rx) { gPushRx.onControl(rx); }
 
 void drawDisplay() {
+    if (!gOledPresent) return;   // headless: kein Display bestueckt
     // Display ist 128 x 64 Pixel.
     // U8g2 nutzt Baseline-Y; mit u8g2_font_6x10_tf hat eine Zeile rund 10 px
     // Hoehe (Glyph-Top etwa Baseline-7, Descender bis Baseline+2). Mit dem
@@ -327,7 +344,7 @@ void drawDisplay() {
     // K1V cyclet Volume, K2S cyclet Sound, K3L = Laser, K4P = vorhoeren.
     // 21 Zeichen passen knapp in 128 px (6 px Glyph × 21 = 126 px).
     u8g2.drawHLine(0, 52, 128);
-    u8g2.drawStr(0, 62, "K1V+ K2S+ K3L K4Play");
+    u8g2.drawStr(0, 62, "K1V+ K2S+ K3L K4Play");   // Debug-Tasten (OLED-Modul)
     u8g2.sendBuffer();
 }
 
@@ -425,6 +442,9 @@ static void updateStatusLed() {
         // Doc 18 §7: weisses schnelles Pulsen, selbstloeschend nach dem
         // 700-ms-Fenster der Config-Box.
         color = ((millis() / 200) % 2 == 0) ? strip.Color(0, 0, 0, 180) : 0;
+    } else if (millis() < gShotFlashUntil) {
+        // Doc 12 §2: Weiss-Blitz = "Schuss abgegeben"
+        color = strip.Color(0, 0, 0, 220);
     } else if (gPlayState == PLAYING) {
         color = maskToColor(gSettings.ledBusy);
     } else {
@@ -659,7 +679,7 @@ static void runPushReceiveMode() {
         const size_t totalNow = gPushRx.bytesTotal();
         const unsigned pct =
             totalNow ? (unsigned)(gPushRx.bytesDone() * 100 / totalNow) : 0;
-        if (pct != lastPct && millis() - lastDraw > 1000) {
+        if (gOledPresent && pct != lastPct && millis() - lastDraw > 1000) {
             lastPct = pct;
             lastDraw = millis();
             u8g2.clearBuffer();
@@ -678,9 +698,11 @@ static void runPushReceiveMode() {
         }
 
         if (gPushRx.state() == EspNowPushReceiver::DONE) {
-            u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 63, "OK - Neustart...");
-            u8g2.sendBuffer();
+            if (gOledPresent) {
+                u8g2.setFont(u8g2_font_7x14B_tf);
+                u8g2.drawStr(0, 63, "OK - Neustart...");
+                u8g2.sendBuffer();
+            }
             delay(500);
             ESP.restart();
         }
@@ -694,19 +716,23 @@ static void runPushReceiveMode() {
             }
             Serial.printf("[PUSH] Abbruch (%s / Update-Err %u: %s)\n", why,
                           Update.getError(), Update.errorString());
-            u8g2.clearBuffer();
-            u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 26, "Update-Fehler:");
-            u8g2.drawStr(0, 44, why);
-            u8g2.setFont(u8g2_font_6x10_tf);
-            // Detailgrund der Update-Lib (z. B. "Could Not Activate...")
-            char detail[32];
-            snprintf(detail, sizeof(detail), "#%u %s", Update.getError(),
-                     Update.errorString());
-            u8g2.drawStr(0, 54, detail);
-            u8g2.drawStr(0, 63, "Neustart mit alter FW...");
-            u8g2.sendBuffer();
-            delay(6000);   // lange genug zum Ablesen
+            if (gOledPresent) {
+                u8g2.clearBuffer();
+                u8g2.setFont(u8g2_font_7x14B_tf);
+                u8g2.drawStr(0, 26, "Update-Fehler:");
+                u8g2.drawStr(0, 44, why);
+                u8g2.setFont(u8g2_font_6x10_tf);
+                // Detailgrund der Update-Lib ("Could Not Activate...")
+                char detail[32];
+                snprintf(detail, sizeof(detail), "#%u %s", Update.getError(),
+                         Update.errorString());
+                u8g2.drawStr(0, 54, detail);
+                u8g2.drawStr(0, 63, "Neustart mit alter FW...");
+                u8g2.sendBuffer();
+                delay(6000);   // lange genug zum Ablesen
+            } else {
+                delay(500);
+            }
             ESP.restart();
         }
         delay(2);
@@ -748,28 +774,32 @@ static void runUpdateMode(uint8_t minutes) {
     upd.setCustomPage(page.c_str());
     if (!upd.begin(ap, ver, label, "infinitag-station")) {
         Serial.println("[UPD] SoftAP-Start fehlgeschlagen -> Reboot");
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_7x14B_tf);
-        u8g2.drawStr(0, 26, "AP-Fehler");
-        u8g2.drawStr(0, 44, "Neustart...");
-        u8g2.sendBuffer();
+        if (gOledPresent) {
+            u8g2.clearBuffer();
+            u8g2.setFont(u8g2_font_7x14B_tf);
+            u8g2.drawStr(0, 26, "AP-Fehler");
+            u8g2.drawStr(0, 44, "Neustart...");
+            u8g2.sendBuffer();
+        }
         delay(800);
         ESP.restart();
     }
     Serial.printf("[UPD] Update-Modus: AP %s, http://%s, %u min\n", ap,
                   upd.apIp(), minutes);
 
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_7x14B_tf);
-    u8g2.drawStr(0, 14, "UPDATE-MODUS");
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 28, "WLAN:");
-    u8g2.drawStr(36, 28, ap);
-    u8g2.drawStr(0, 40, "http://192.168.4.1");
-    char line[24];
-    snprintf(line, sizeof(line), "FW %s  Timeout %umin", ver, minutes);
-    u8g2.drawStr(0, 52, line);
-    u8g2.sendBuffer();
+    if (gOledPresent) {
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_7x14B_tf);
+        u8g2.drawStr(0, 14, "UPDATE-MODUS");
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(0, 28, "WLAN:");
+        u8g2.drawStr(36, 28, ap);
+        u8g2.drawStr(0, 40, "http://192.168.4.1");
+        char line[24];
+        snprintf(line, sizeof(line), "FW %s  Timeout %umin", ver, minutes);
+        u8g2.drawStr(0, 52, line);
+        u8g2.sendBuffer();
+    }
 
     const uint32_t deadline = millis() + (uint32_t)minutes * 60000UL;
     bool ledOn = false;
@@ -784,9 +814,11 @@ static void runUpdateMode(uint8_t minutes) {
         }
 
         if (upd.updateDone()) {
-            u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 63, "OK - Neustart...");
-            u8g2.sendBuffer();
+            if (gOledPresent) {
+                u8g2.setFont(u8g2_font_7x14B_tf);
+                u8g2.drawStr(0, 63, "OK - Neustart...");
+                u8g2.sendBuffer();
+            }
             delay(1500);  // Antwortseite noch ausliefern lassen
             ESP.restart();
         }
@@ -795,9 +827,11 @@ static void runUpdateMode(uint8_t minutes) {
             // last buffer across ESP.restart(), without this you cannot
             // tell that the reboot happened.
             Serial.println("[UPD] Timeout ohne Upload -> Reboot");
-            u8g2.setFont(u8g2_font_7x14B_tf);
-            u8g2.drawStr(0, 63, "Timeout-Neustart");
-            u8g2.sendBuffer();
+            if (gOledPresent) {
+                u8g2.setFont(u8g2_font_7x14B_tf);
+                u8g2.drawStr(0, 63, "Timeout-Neustart");
+                u8g2.sendBuffer();
+            }
             delay(800);
             ESP.restart();
         }
@@ -891,9 +925,17 @@ void setup() {
     Wire.begin(OLED_SDA, OLED_SCL, 100000);
     Serial.printf("[I2C]  SDA=GPIO%d  SCL=GPIO%d  @ 100 kHz\n", OLED_SDA, OLED_SCL);
 
-    // OLED starten
-    if (!u8g2.begin()) {
+    // OLED ist OPTIONAL (Debug-Bestueckung): I2C-Probe auf 0x3C entscheidet.
+    // Ohne Display laeuft die Station headless - alle Zeichenpfade sind
+    // ueber gOledPresent abgesichert (spart zudem die ~100-ms-I2C-Writes,
+    // die im Update-/Spielbetrieb nur blockieren wuerden).
+    Wire.beginTransmission(0x3C);
+    gOledPresent = (Wire.endTransmission() == 0);
+    if (!gOledPresent) {
+        Serial.println("[OLED] nicht gefunden (0x3C) - Headless-Betrieb");
+    } else if (!u8g2.begin()) {
         Serial.println("[OLED] u8g2.begin() FEHLER – pruefe Verkabelung / Adresse");
+        gOledPresent = false;
     } else {
         Serial.println("[OLED] u8g2 bereit");
     }
@@ -906,11 +948,12 @@ void setup() {
     // Falls nach dem Reflash der Muell auf die rechte Seite wandert, einfach
     // wieder auf 2 zuruecksetzen. Auf einem PCB-Modul ggf. anderen U8g2-
     // Konstruktor probieren (_WINSTAR_, _VCOMH0_).
-    u8g2.getU8x8()->x_offset = 0;
-
-    u8g2.setBusClock(100000);   // U8g2 nutzt teilweise eigenen Bus-Speed
-    u8g2.setContrast(255);
-    u8g2.clearDisplay();        // GDRAM komplett loeschen → keine Boot-Muellreste links
+    if (gOledPresent) {
+        u8g2.getU8x8()->x_offset = 0;
+        u8g2.setBusClock(100000);   // U8g2 nutzt teilweise eigenen Bus-Speed
+        u8g2.setContrast(255);
+        u8g2.clearDisplay();    // GDRAM loeschen → keine Boot-Muellreste
+    }
 
     // I²S starten (dauerhafter Stream, niemals stoppen)
     i2s_setup();
@@ -962,9 +1005,9 @@ void setup() {
     // Erster Display-Refresh + Stab auf Statusfarbe (bereit)
     drawDisplay();
     updateStatusLed();
-    Serial.println("[Setup] Bereit. K1 = Volume cyclen, K2 = Sound cyclen,");
-    Serial.println("        K3 = Laser, K4 = aktuellen Sound vorhoeren,");
-    Serial.println("        Trigger (GPIO4) = IR-Burst + aktuellen Sound abspielen.");
+    Serial.println("[Setup] Bereit (Live-Betrieb). Trigger = IR-Schuss,");
+    Serial.println("        Sound kommt per HIT_REPORT vom Target.");
+    Serial.println("        Debug: K1 Volume, K2 Sound-Wahl, K3 Laser, K4 Vorhoeren.");
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
@@ -1071,37 +1114,25 @@ void loop() {
         needRedraw  = true;
     }
 
-    // Trigger (GPIO 4): Stab-Trigger → wie K4 (IR + Sound), aber
-    //   - er WECHSELT den Sound NICHT (gSoundIdx bleibt),
-    //   - er nutzt einen separaten Counter (gTrigCount),
-    //   - damit der `[TRIG]`-Tag im Log den Weg ueber den Trigger-Pfad
-    //     belegt (und nicht ueber K4-Druecken).
-    // So kann man mit K4 den Sound waehlen und dann mit dem Stab beliebig
-    // oft "feuern". Frueher fix DOOR_BANG_WAV, jetzt der ausgewaehlte Sound.
+    // Trigger (GPIO 4): LIVE-SCHUSS.
+    // IR-Burst + Weiss-Blitz am Stab - KEIN lokaler Sound. Der Sound kommt
+    // erst, wenn ein Target den Treffer per HIT_REPORT an unsere MAC
+    // meldet (NowStation spielt dann die gemeldete sound_id). Cooldown
+    // verhindert Dauerfeuer-Spam; der Selbsttest DBG_TRIGGER faengt den
+    // Druck ab, ohne einen Schuss auszuloesen.
     if (btnPressedEdge(gBtns[4])) {
       if (gNow.consumeTriggerTest()) {
         // Selbsttest: Trigger-Test bestanden (Ergebnis geht per Funk an
         // die Config-Box) – kein Schuss ausloesen.
         needRedraw = true;
-      } else {
-        Serial.printf("[TRIG] Trigger ausgeloest (Trig #%lu) – IR + Sound %s\n",
-            (unsigned long)(gTrigCount + 1), SOUNDS[gSoundIdx].name);
-        PlayState prev = gPlayState;
-        gPlayState = PLAYING;
-        drawDisplay();
-        updateStatusLed();      // busy-Farbe VOR dem blockierenden playWav
-
-        sendIrBurst(1);
-        playWav(SOUNDS[gSoundIdx].file);
-
-        gPlayCount++;
+      } else if (millis() - gLastShotMs >= SHOT_COOLDOWN_MS) {
+        gLastShotMs = millis();
         gTrigCount++;
-        gLastPlayMs = millis();
-        gPlayState  = prev;
-        if (prev == IDLE_STREAM) {
-            digitalWrite(XSMT_PIN, HIGH);
-        }
-        updateStatusLed();
+        Serial.printf("[TRIG] Schuss #%lu (IR %u ms)\n",
+            (unsigned long)gTrigCount, (unsigned)IR_SHOT_MS);
+        sendIrBurst(IR_SHOT_MS);
+        gShotFlashUntil = millis() + SHOT_FLASH_MS;
+        updateStatusLed();      // Weiss-Blitz sofort sichtbar
         needRedraw = true;
       }
     }

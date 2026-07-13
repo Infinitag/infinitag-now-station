@@ -32,8 +32,12 @@ API, alte esp_now-Callback-Signatur) – nicht ungefragt auf 3.x heben.
 
 ## Architektur
 
-`src/main.cpp` = Bring-up-Sketch (I²S/WAV, OLED SH1106, NeoPixel am Stab,
-IR-Burst 38 kHz, Laser, 4 Tasten + Stab-Trigger). Darauf aufgesetzt:
+`src/main.cpp` = Live-Firmware (I²S/WAV, optionales OLED SH1106 per
+I²C-Probe, NeoPixel am Stab, IR-Burst 38 kHz, Laser, 4 Debug-Tasten +
+Stab-Trigger). **Live-Fluss:** Trigger → IR-Schuss + Weiss-Blitz (kein
+Sound); Sound spielt erst der HIT_REPORT vom Target (MAC-gefiltert).
+Kalibriermodus (DBG_CALIBRATE via Config-Box): Laser + IR dauerhaft an
+fuers Optik-Ausrichten, Trigger gesperrt. Darauf aufgesetzt:
 `src/NowStation.*` (ESP-NOW-Gerätelogik v0x02: Discovery, Identify, CFG,
 Test-Sound, HIT_REPORT per MAC, UPDATE_BEGIN) und
 `src/StationSettings.*` (NVS: volumePct, ledReady, ledBusy).

@@ -98,6 +98,18 @@ void NowStation::handleDebugCmd(const RxPacket &rx) {
       }
       break;
 
+    case DBG_CALIBRATE:
+      if (_hooks && _hooks->calibrate) {
+        uint8_t min = param;
+        if (min > 60) min = 60;  // safety clamp (auto-off)
+        _hooks->calibrate(min > 0, min);
+        _dirty = true;
+        sendDebugResult(rx.mac, test, DBG_RES_OK);
+      } else {
+        sendDebugResult(rx.mac, test, DBG_RES_UNSUPPORTED);
+      }
+      break;
+
     case DBG_TRIGGER: {
       const uint8_t s = param == 0 ? 10 : param;
       _trigTestUntil = millis() + (uint32_t)s * 1000UL;

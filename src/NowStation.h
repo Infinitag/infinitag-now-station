@@ -21,6 +21,9 @@ struct DebugHooks {
   void (*ledTest)();              // run LED test pattern (may block ~2 s)
   void (*laserPulse)(uint8_t s);  // laser on, auto-off after s seconds
   bool (*irBurst)(uint8_t ms);    // send IR burst, return TSOP self-check
+  // Calibration mode: laser + IR driver continuously on (optics
+  // alignment with a white LED swapped in). minutes = auto-off.
+  void (*calibrate)(bool on, uint8_t minutes);
 };
 
 class NowStation {

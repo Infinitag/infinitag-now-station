@@ -241,6 +241,7 @@ enum PlayState : uint8_t { READY, IDLE_STREAM, PLAYING };
 static PlayState  gPlayState   = READY;
 static uint32_t   gLastPlayMs  = 0;
 static uint32_t   gLastShotMs  = 0;   // letzter Schuss (Cooldown)
+static uint32_t   gCalibUntil  = 0;   // Kalibriermodus aktiv bis (0 = aus)
 static uint32_t   gShotFlashUntil = 0;  // Weiss-Blitz bis (0 = aus)
 static bool       gOledPresent = false;  // I2C-Probe in setup()
 static uint32_t   gPlayCount   = 0;   // alle Sound-Wiedergaben (egal welche Quelle)
@@ -292,7 +293,9 @@ void drawDisplay() {
     //   3) Sonst Laser-Zustand: "Laser AN" oder "Bereit"
     u8g2.setFont(u8g2_font_7x14B_tf);
     const char* statusStr;
-    if (gPlayState == PLAYING) {
+    if (gCalibUntil != 0) {
+        statusStr = "Kalibrierung";
+    } else if (gPlayState == PLAYING) {
         statusStr = "Playing...";
     } else if (gPlayState == IDLE_STREAM) {
         statusStr = "DAC idle";
@@ -442,6 +445,9 @@ static void updateStatusLed() {
         // Doc 18 §7: weisses schnelles Pulsen, selbstloeschend nach dem
         // 700-ms-Fenster der Config-Box.
         color = ((millis() / 200) % 2 == 0) ? strip.Color(0, 0, 0, 180) : 0;
+    } else if (gCalibUntil != 0) {
+        // Kalibriermodus: Violett (R+B) als eindeutige Modus-Farbe
+        color = strip.Color(180, 0, 180);
     } else if (millis() < gShotFlashUntil) {
         // Doc 12 §2: Weiss-Blitz = "Schuss abgegeben"
         color = strip.Color(0, 0, 0, 220);
@@ -855,8 +861,30 @@ static bool hookIrBurst(uint8_t ms) {
     return gLastIrOk;
 }
 
+// Kalibriermodus (DBG_CALIBRATE, PROTOCOL.md Test 6): Laser + IR-Treiber
+// dauerhaft an, damit die (gegen weiss getauschte) IR-LED und der Laser
+// zum Zentrieren des Optik-Blocks sichtbar sind. 50 % Duty statt DC:
+// fuer das Auge flimmerfrei, fuer eine echte IR-LED thermisch sicher.
+static void hookCalibrate(bool on, uint8_t minutes) {
+    if (on) {
+        gCalibUntil = millis() + (uint32_t)minutes * 60000UL;
+        gLaserOn = true;
+        gLaserTestOffMs = 0;
+        digitalWrite(LASER_PIN, HIGH);
+        ledcWrite(IR_LEDC_CHANNEL, 128);
+        Serial.printf("[CAL] Kalibriermodus AN (%u min)\n", minutes);
+    } else {
+        gCalibUntil = 0;
+        gLaserOn = false;
+        gLaserTestOffMs = 0;
+        digitalWrite(LASER_PIN, LOW);
+        ledcWrite(IR_LEDC_CHANNEL, 0);
+        Serial.println("[CAL] Kalibriermodus AUS");
+    }
+}
+
 static const DebugHooks kDebugHooks = {hookLedTest, hookLaserPulse,
-                                       hookIrBurst};
+                                       hookIrBurst, hookCalibrate};
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
@@ -1026,6 +1054,12 @@ void loop() {
     // PUSH_BEGIN empfangen? -> blockierender Funk-Update-Modus.
     if (gPushRx.active()) runPushReceiveMode();
 
+    // Kalibriermodus: Auto-Aus nach Ablauf der Minuten
+    if (gCalibUntil != 0 && millis() >= gCalibUntil) {
+        hookCalibrate(false, 0);
+        needRedraw = true;
+    }
+
     // Selbsttest: Laser-Testpuls automatisch beenden
     if (gLaserTestOffMs != 0 && millis() >= gLaserTestOffMs) {
         gLaserTestOffMs = 0;
@@ -1075,7 +1109,7 @@ void loop() {
     // (nicht nur ein kurzer Burst), damit man dauerhaft sieht ob die IR-LED
     // sendet – am [BTN-RAW]-Log (TSOP=0 = empfaengt) bzw. per Handy-Kamera.
     // Mit K3 wieder aus. (Die Display-Box I:..+ zaehlt nur Trigger-Bursts.)
-    if (btnPressedEdge(gBtns[2])) {
+    if (btnPressedEdge(gBtns[2]) && gCalibUntil == 0) {  // im Kalibriermodus gesperrt
         gLaserOn = !gLaserOn;
         digitalWrite(LASER_PIN, gLaserOn ? HIGH : LOW);
         ledcWrite(IR_LEDC_CHANNEL, gLaserOn ? IR_DUTY_8BIT : 0);
@@ -1125,6 +1159,9 @@ void loop() {
         // Selbsttest: Trigger-Test bestanden (Ergebnis geht per Funk an
         // die Config-Box) – kein Schuss ausloesen.
         needRedraw = true;
+      } else if (gCalibUntil != 0) {
+        // Kalibriermodus: kein Schuss (der Burst wuerde den Dauer-IR-
+        // Pegel am Ende abschalten)
       } else if (millis() - gLastShotMs >= SHOT_COOLDOWN_MS) {
         gLastShotMs = millis();
         gTrigCount++;

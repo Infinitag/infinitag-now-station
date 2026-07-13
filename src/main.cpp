@@ -630,10 +630,20 @@ void playWav(const char* path) {
 
     f.close();
 
-    // ── Sound-Ende: erst Stille, dann DAC stumm ───────────────────────────────
-    i2s_zero_dma_buffer(I2S_PORT);    // I²S streamt jetzt Null-Samples
-    delay(5);                          // Stille sicher im DMA-Buffer
+    // ── Sound-Ende: DMA erst LEERSPIELEN lassen, dann muten ──────────────────
+    // i2s_write() kehrt zurueck, sobald die Daten im DMA-Ring LIEGEN -
+    // dort stecken noch bis zu DMA_BUF_COUNT x DMA_BUF_LEN Samples
+    // (~370 ms bei 22,05 kHz). Sofortiges zero+mute schnitt genau dieses
+    // Ende von jedem Sound ab. Ein voller Ring Stille hinterher blockiert
+    // exakt, bis alle echten Samples gespielt sind.
+    memset(buf, 0, BUF);
+    const size_t ringBytes = (size_t)DMA_BUF_COUNT * DMA_BUF_LEN * 2;
+    for (size_t drained = 0; drained < ringBytes; drained += BUF) {
+        i2s_write(I2S_PORT, buf, BUF, &written, portMAX_DELAY);
+    }
+    delay(5);                          // letzter echter Sample sicher am DAC
     digitalWrite(XSMT_PIN, LOW);      // DAC Soft-Fade-Out aus Stille → lautlos
+    i2s_zero_dma_buffer(I2S_PORT);    // Ring ist bereits still; Sicherheitsnetz
     Serial.println("[WAV] Fertig.");
 }
 
@@ -661,9 +671,15 @@ void playShotSound() {
         pos += n;
     }
 
-    i2s_zero_dma_buffer(I2S_PORT);
+    // DMA leerspielen (siehe playWav): sonst fehlen die letzten ~370 ms
+    memset(buf, 0, BUF);
+    const size_t ringBytes = (size_t)DMA_BUF_COUNT * DMA_BUF_LEN * 2;
+    for (size_t drained = 0; drained < ringBytes; drained += BUF) {
+        i2s_write(I2S_PORT, buf, BUF, &written, portMAX_DELAY);
+    }
     delay(5);
     digitalWrite(XSMT_PIN, LOW);
+    i2s_zero_dma_buffer(I2S_PORT);
 }
 
 // ── Infinitag Now: Helfer ────────────────────────────────────────────────────

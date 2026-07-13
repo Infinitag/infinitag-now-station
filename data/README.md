@@ -60,3 +60,13 @@ auswählen (Name erscheint neben der ID) und abspielen.
 
 Die LittleFS-Partition ist ~10 MB groß; die 15 Standard-Sounds belegen
 rund 4,4 MB. Als Faustregel: 1 Sekunde Audio ≈ 43 KB.
+
+## Eingebetteter Schuss-Sound (nicht in diesem Ordner)
+
+Der Trigger-Sound liegt NICHT im LittleFS, sondern als PCM-Array in der
+Firmware (`src/ShotSound.h`), damit er jedes OTA-/Funk-Update automatisch
+mitmacht:
+
+| Sound | Quelle | Lizenz |
+| --- | --- | --- |
+| "Enchant" (Zauber-Schuss) | qubodup, https://freesound.org/s/202147/ | CC BY 4.0 (gemixt aus CC0-Quellen: freesound 157338/symphoid, 180745/Selector) |

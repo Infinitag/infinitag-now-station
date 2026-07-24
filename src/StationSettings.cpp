@@ -12,6 +12,7 @@ void StationSettings::load() {
   ledBusy = prefs.getUChar("ledbsy", 0x01);
   laserMode = prefs.getUChar("lasmod", 3);
   laserGlow = prefs.getUChar("lasglo", 1);
+  irId = prefs.getUChar("irid", 0);
   prefs.end();
 }
 
@@ -23,5 +24,6 @@ void StationSettings::save() const {
   prefs.putUChar("ledbsy", ledBusy);
   prefs.putUChar("lasmod", laserMode);
   prefs.putUChar("lasglo", laserGlow);
+  prefs.putUChar("irid", irId);
   prefs.end();
 }

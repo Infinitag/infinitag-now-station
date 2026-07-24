@@ -12,6 +12,7 @@ struct StationSettings {
   uint8_t ledBusy = 0x01;   // wand LED mask "busy" (audio playing), default red
   uint8_t laserMode = 3;    // inow::LaserMode: 1=off, 2=on, 3=afterglow (default)
   uint8_t laserGlow = 1;    // afterglow in 500-ms steps (mode 3), default 500 ms
+  uint8_t irId = 0;         // shooter id in the IR telegram (0..15, 0 = factory group)
 
   void load();
   void save() const;

@@ -145,6 +145,7 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
   c.laser_mode = _settings->laserMode;
   c.laser_glow = _settings->laserGlow;
   c.ir_id = _settings->irId;
+  c.led_bright_pct = _settings->ledBrightPct;
   r.config_blob_len = STATION_BLOB_SIZE;
   encodeStationConfig(c, r.config_blob);
 
@@ -185,7 +186,8 @@ void NowStation::handlePacket(const RxPacket &rx) {
       decodeStationConfig(p.payload, STATION_BLOB_SIZE, c);
       if (c.volume_pct > 100 || c.led_ready > LED_MASK_MAX ||
           c.led_busy > LED_MASK_MAX || c.laser_mode > LASER_MODE_GLOW ||
-          c.laser_glow > LASER_GLOW_MAX || c.ir_id > IR_ID_MAX) {
+          c.laser_glow > LASER_GLOW_MAX || c.ir_id > IR_ID_MAX ||
+          c.led_bright_pct > 100) {
         sendAck(rx.mac, ACK_NACK_VALIDATION);
         break;
       }
@@ -195,15 +197,17 @@ void NowStation::handlePacket(const RxPacket &rx) {
       _settings->laserMode = c.laser_mode;
       _settings->laserGlow = c.laser_glow == 0 ? 1 : c.laser_glow;
       _settings->irId = c.ir_id;
+      // 0 = unset (alter Sender) -> Default behalten (wie Laser-Felder)
+      if (c.led_bright_pct != 0) _settings->ledBrightPct = c.led_bright_pct;
       _settings->save();
       if (_onConfigChanged) _onConfigChanged();
       _dirty = true;
       sendAck(rx.mac, ACK_OK);
       Serial.printf(
           "[NOW] CFG_WRITE: vol=%u%% ledRdy=0x%X ledBsy=0x%X laser=%u/%u "
-          "irId=%u\n",
+          "irId=%u bright=%u%%\n",
           c.volume_pct, c.led_ready, c.led_busy, c.laser_mode, c.laser_glow,
-          c.ir_id);
+          c.ir_id, c.led_bright_pct);
       break;
     }
 

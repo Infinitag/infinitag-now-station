@@ -17,10 +17,14 @@ im Vorgarten, auf dem Kindergeburtstag oder der Gartenparty.
 
 ## Features
 
-- **Zauberstab-Anschluss:** Der Trigger löst den Zauber aus (IR-Impuls,
-  38 kHz) samt Sound; Laser-Zielhilfe, RGBW-LEDs im Stab zeigen den
-  Status – Grün = bereit für den nächsten Zauber, Rot = beschäftigt
-  (Farben frei konfigurierbar)
+- **Zauberstab-Anschluss:** Der Trigger löst den Zauber aus – ein
+  IR-Telegramm (38 kHz) mit der Kennung dieser Station und Schadenswert,
+  CRC-gesichert; Laser-Zielhilfe, RGBW-LEDs im Stab zeigen den Status –
+  Grün = bereit für den nächsten Zauber, Rot = beschäftigt (Farben frei
+  konfigurierbar)
+- **Jeder schießt auf alles:** Treffer-Sounds wandern automatisch zu der
+  Station, deren Zauberstab getroffen hat (Schützen-ID im IR-Telegramm) –
+  beliebig viele Stationen und Ziele, keine feste Zuordnung
 - **Satter Sound:** WAV-Wiedergabe über I²S (PCM5102A-DAC → TPA3110-Amp,
   12 V), 15 frei austauschbare Sounds im internen Flash (LittleFS, ab
   Werk Halloween-Effekte), pop-freies Muting
@@ -85,11 +89,12 @@ Station nach 5 Minuten automatisch zur alten Firmware zurück.
 ## Konfiguration
 
 Alles Einstellbare läuft über die Config-Box (Funk, persistiert im NVS
-der Station): Lautstärke, Stab-Statusfarben (`LED bereit` / `LED aktiv`,
+der Station): Lautstärke, IR-ID (Schützen-Kennung im Telegramm, 0–15),
+Stab-Statusfarben (`LED bereit` / `LED aktiv`,
 alle 15 R/G/B/W-Kombinationen). Dazu Sound-Test und kompletter
 Selbsttest aus der Ferne. Das Funkprotokoll ist in
 [`PROTOCOL.md`](https://github.com/Infinitag/infinitag-now-core/blob/main/PROTOCOL.md)
-spezifiziert (v0x02).
+spezifiziert (v0x03, inkl. IR-Telegramm).
 
 ## Entwicklung
 

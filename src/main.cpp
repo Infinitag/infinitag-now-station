@@ -1,10 +1,12 @@
 /**
  * Infinitag Station V2 – Live-Firmware (Schiessbuden-Betrieb)
  *
- * Spielfluss (Doc 12 §3.7, PROTOCOL.md):
- *   Stab-Trigger  → IR-Schuss (Burst) + Weiss-Blitz am Stab, KEIN Sound.
- *   Ziel getroffen → Target broadcastet HIT_REPORT (Ziel-Station-MAC +
- *   sound_id) → diese Station spielt den gemeldeten Sound (NowStation).
+ * Spielfluss (Doc 12 §3.7, PROTOCOL.md v0x03):
+ *   Stab-Trigger  → IR-Telegramm (shooter_id = eigene ir_id + damage,
+ *   IrTelegram.h) + Weiss-Blitz am Stab, KEIN Sound. Ziel getroffen →
+ *   Target broadcastet HIT_REPORT (shooter_id, sound_id, damage) → die
+ *   Station, deren ir_id zur shooter_id passt, spielt den Sound
+ *   (NowStation) – jeder Zauberstab schiesst auf jedes Target.
  *
  * Debug-Bedienung (optional, OLED-Modul mit K1..K4 aufsteckbar):
  *   K1 cycelt Volume, K2 waehlt den Vorhoer-Sound, K3 toggelt Laser+IR,
@@ -44,6 +46,7 @@
 #include <Adafruit_NeoPixel.h>
 
 #include "EspNowPush.h"
+#include "IrTelegram.h"
 #include "ShotSound.h"
 #include "FwMarker.h"
 #include "NowStation.h"
@@ -78,11 +81,10 @@ INOW_FW_MARKER(inow::DEV_STATION, STATION_FW_MAJOR, STATION_FW_MINOR,
 #define TRIG_PIN      4   // Stab-Trigger → IR-Schuss (Live-Betrieb)
 
 // ── Schuss-Verhalten (Live-Betrieb) ─────────────────────────────────────────
-// Burst-Laenge: lang genug fuer eine robuste TSOP-Erkennung am Target,
-// kurz genug fuer schnelles Nachfeuern. Das endgueltige IR-Telegramm
-// (Validierung gegen Fremd-IR) wird mit der Target-Firmware festgelegt –
-// offener Punkt in Doc 11.
-#define IR_SHOT_MS        5     // IR-Burst pro Schuss
+// Der Schuss ist seit Protokoll v0x03 ein IR-Telegramm (IrTelegram.h):
+// shooter_id = konfigurierte ir_id dieser Station + damage, CRC-gesichert.
+// Dauer 22,8-32,4 ms, blockierend gesendet (wie zuvor der 5-ms-Burst).
+#define IR_SHOT_DAMAGE    1     // Schadenswert pro Schuss (Hitpoints spaeter)
 #define SHOT_COOLDOWN_MS  250   // fruehester Folgeschuss danach
 #define SHOT_FLASH_MS     150   // Weiss-Blitz am Stab ("Schuss abgegeben")
 
@@ -550,6 +552,31 @@ void sendIrBurst(uint32_t ms) {
     gLastIrOk = tsopGotIt;
     Serial.printf("[IR]  Burst #%lu, %lu ms gesendet. TSOP: %s\n",
         (unsigned long)gIrCount, ms,
+        tsopGotIt ? "empfangen ✓" : "KEIN Empfang ✗");
+}
+
+// ── IR-Telegramm senden (Schuss, PROTOCOL.md v0x03) ──────────────────────────
+// Sendet den Frame als Mark/Space-Folge (Timing-Tabelle aus dem Core) ueber
+// den 38-kHz-LEDC-Kanal. Blockiert 22,8-32,4 ms; nebenbei wird der TSOP
+// gesampelt (Selbstempfangs-Diagnose wie beim alten Burst).
+void sendIrTelegram(uint16_t frame) {
+    uint16_t t[inow::IRT_PULSE_COUNT];
+    const size_t n = inow::irtTimings(frame, t, inow::IRT_PULSE_COUNT);
+    bool tsopGotIt = false;
+
+    for (size_t i = 0; i < n; i++) {
+        ledcWrite(IR_LEDC_CHANNEL, (i % 2) == 0 ? IR_DUTY_8BIT : 0);
+        const uint32_t phaseEnd = micros() + t[i];
+        while ((int32_t)(micros() - phaseEnd) < 0) {
+            if (digitalRead(TSOP_PIN) == LOW) tsopGotIt = true;
+        }
+    }
+    ledcWrite(IR_LEDC_CHANNEL, 0);  // stop mark ist der letzte Eintrag
+
+    gIrCount++;
+    gLastIrOk = tsopGotIt;
+    Serial.printf("[IR]  Telegramm #%lu (Frame 0x%04X) gesendet. TSOP: %s\n",
+        (unsigned long)gIrCount, frame,
         tsopGotIt ? "empfangen ✓" : "KEIN Empfang ✗");
 }
 
@@ -1257,16 +1284,17 @@ void loop() {
       } else if (millis() - gLastShotMs >= SHOT_COOLDOWN_MS) {
         gLastShotMs = millis();
         gTrigCount++;
-        Serial.printf("[TRIG] Schuss #%lu (IR %u ms)\n",
-            (unsigned long)gTrigCount, (unsigned)IR_SHOT_MS);
+        Serial.printf("[TRIG] Schuss #%lu (irId %u, dmg %u)\n",
+            (unsigned long)gTrigCount, (unsigned)gSettings.irId,
+            (unsigned)IR_SHOT_DAMAGE);
         // Schuss-Laser (Config): Nachleuchten ab jetzt, laserTask schaltet
         if (gSettings.laserMode == inow::LASER_MODE_GLOW) {
             gLaserGlowOffMs =
                 millis() + (uint32_t)(gSettings.laserGlow == 0
                                           ? 1 : gSettings.laserGlow) * 500UL;
         }
-        laserTask();            // Laser VOR dem Burst an
-        sendIrBurst(IR_SHOT_MS);
+        laserTask();            // Laser VOR dem Telegramm an
+        sendIrTelegram(inow::irtEncode(gSettings.irId, IR_SHOT_DAMAGE));
         gShotFlashUntil = millis() + SHOT_FLASH_MS;
         updateStatusLed();      // Weiss-Blitz sofort sichtbar
         // Zauber-Sound zum Schuss (blockiert ~0,73 s; ein waehrenddessen

@@ -62,7 +62,7 @@ void NowStation::handleDebugCmd(const RxPacket &rx) {
   switch (test) {
     case DBG_SOUND:
       if (_play && param < _numSounds) {
-        _play(param);  // blocking; result marks "done playing"
+        _play(param);  // queued; main plays it right after this loop() pass
         sendDebugResult(rx.mac, test, DBG_RES_OK);
       } else {
         sendDebugResult(rx.mac, test, DBG_RES_FAIL);

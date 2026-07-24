@@ -260,6 +260,11 @@ static StationSettings gSettings;
 static NowStation      gNow;
 static EspNowPushReceiver gPushRx;   // ESP-NOW-Funk-Update (Doc 21 E3)
 
+// Von den ESP-NOW-Handlern angeforderter Sound (HIT_REPORT/Test), -1 = keiner.
+// Entkoppelt Funk und Wiedergabe: der Handler queued nur, gespielt wird im
+// loop() – und ein laufender Schuss-Sound kann dem Treffer sofort weichen.
+static volatile int16_t gPendingSound = -1;
+
 static void pushControlBridge(const RxPacket& rx) { gPushRx.onControl(rx); }
 
 void drawDisplay() {
@@ -685,6 +690,15 @@ void playShotSound() {
     uint8_t buf[BUF];
     size_t pos = 0, written = 0;
     while (pos < SHOT_SOUND_BYTES) {
+        // Funk zwischen den Audio-Bloecken weiter bedienen (~46-ms-Raster):
+        // meldet ein Target den Treffer, wird der Rest des Schuss-Sounds
+        // verworfen - der Treffer-Sound ist die Belohnung und darf nicht
+        // ~0,7 s warten (Latenzbudget Doc 12 §3.7).
+        gNow.loop();
+        if (gPendingSound >= 0) {
+            i2s_zero_dma_buffer(I2S_PORT);  // gepufferten Rest (~370 ms) kappen
+            return;  // XSMT bleibt aktiv, der Treffer-Sound uebernimmt sofort
+        }
         const size_t n =
             (SHOT_SOUND_BYTES - pos) < BUF ? (SHOT_SOUND_BYTES - pos) : BUF;
         memcpy_P(buf, SHOT_SOUND_PCM + pos, n);
@@ -709,8 +723,16 @@ void playShotSound() {
 }
 
 // ── Infinitag Now: Helfer ────────────────────────────────────────────────────
-// Spielt einen Sound per 0-basiertem Index (fuer ESP-NOW-Handler: Test-Sound,
-// HIT_REPORT, Setup-Bestaetigung). Gleiches PlayState-Handling wie K4.
+// ESP-NOW-Handler spielen nicht mehr selbst (sie laufen auch mitten im
+// Schuss-Sound, siehe playShotSound): nur vormerken, loop() spielt. Stehen
+// mehrere Sounds an, gewinnt der letzte (kein Rueckstau).
+static void queueSoundByIndex(uint8_t idx) {
+    if (idx >= NUM_SOUNDS) return;
+    gPendingSound = (int16_t)idx;
+}
+
+// Spielt einen Sound per 0-basiertem Index (aus loop(), wenn ein Handler
+// einen Sound angefordert hat). Gleiches PlayState-Handling wie K4.
 static void playSoundByIndex(uint8_t idx) {
     if (idx >= NUM_SOUNDS) return;
     PlayState prev = gPlayState;
@@ -1129,7 +1151,7 @@ void setup() {
     // Paket bereits abspielen kann.
     gSettings.load();
     applyStationConfig();
-    if (gNow.begin(&gSettings, playSoundByIndex, (uint8_t)NUM_SOUNDS,
+    if (gNow.begin(&gSettings, queueSoundByIndex, (uint8_t)NUM_SOUNDS,
                    applyStationConfig, &kDebugHooks)) {
         gPushRx.begin(gNow.net());
         gNow.setPushHandler(pushControlBridge);
@@ -1155,6 +1177,15 @@ void loop() {
     // Infinitag Now: RX-Queue abarbeiten (Discovery/Identify/CFG/Hit/Update)
     gNow.loop();
     if (gNow.consumeDirty()) needRedraw = true;
+
+    // Angeforderten Sound (HIT_REPORT/Test-Sound) abspielen – entkoppelt vom
+    // Funk-Handler, damit der auch mitten im Schuss-Sound laufen kann.
+    if (gPendingSound >= 0) {
+        const uint8_t sndIdx = (uint8_t)gPendingSound;
+        gPendingSound = -1;
+        playSoundByIndex(sndIdx);
+        needRedraw = true;
+    }
 
     // UPDATE_BEGIN empfangen? -> blockierender SoftAP-Update-Modus,
     // endet immer in ESP.restart().
@@ -1297,8 +1328,9 @@ void loop() {
         sendIrTelegram(inow::irtEncode(gSettings.irId, IR_SHOT_DAMAGE));
         gShotFlashUntil = millis() + SHOT_FLASH_MS;
         updateStatusLed();      // Weiss-Blitz sofort sichtbar
-        // Zauber-Sound zum Schuss (blockiert ~0,73 s; ein waehrenddessen
-        // eintreffender HIT_REPORT wartet im RX-Ring und spielt danach)
+        // Zauber-Sound zum Schuss (max. ~0,73 s; ein eintreffender
+        // HIT_REPORT bricht ihn sofort ab, der Treffer-Sound spielt
+        // direkt danach aus loop() - siehe playShotSound/gPendingSound)
         PlayState prevState = gPlayState;
         gPlayState = PLAYING;
         drawDisplay();

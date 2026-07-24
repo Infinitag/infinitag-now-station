@@ -10,7 +10,7 @@ im Vorgarten, auf dem Kindergeburtstag oder der Gartenparty.
 ![Plattform](https://img.shields.io/badge/Plattform-ESP32--S3-blue)
 ![Framework](https://img.shields.io/badge/Framework-Arduino%20%2F%20PlatformIO-orange)
 ![Funk](https://img.shields.io/badge/Funk-ESP--NOW-purple)
-![Lizenz](https://img.shields.io/badge/Lizenz-CC%20BY--NC--SA%204.0-lightgrey)
+![Lizenz](https://img.shields.io/badge/Lizenz-PolyForm%20NC%201.0.0-lightgrey)
 
 <!-- TODO: Hero-Foto der Station/des Zauberstands einfügen:
      ![Infinitag-Station](docs/station.jpg) -->
@@ -40,7 +40,7 @@ im Vorgarten, auf dem Kindergeburtstag oder der Gartenparty.
 |---|---|---|
 | **Station** | dieses Repo | Sound + Zauberstab (Zauber-Auslösung, Laser, Status-LEDs) |
 | **Config-Box** | [infinitag-now-config](https://github.com/Infinitag/infinitag-now-config) | Handheld-Konfigurator: Discovery, Einstellungen, Updates, Live-Monitor |
-| **Targets** | infinitag-now-target *(in Arbeit)* | IR-Empfänger an den Zielen, melden Treffer per Funk |
+| **Targets** | [infinitag-now-target](https://github.com/Infinitag/infinitag-now-target) | IR-Empfänger an den Zielen, melden Treffer per Funk |
 | Protokoll-Lib | [infinitag-now-core](https://github.com/Infinitag/infinitag-now-core) | Paketformat, `EspNowService`, SoftAP-Updater, `PROTOCOL.md` |
 | Doku | [infinitag-now](https://github.com/Infinitag/infinitag-now) | Wissensbasis (Hardware, Protokoll, Konzepte) |
 
@@ -109,7 +109,10 @@ bewusst gepinnt.
 
 ## Lizenz
 
-[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) – Tobias Stewen.
+[PolyForm Noncommercial 1.0.0](LICENSE) – © 2026 Tobias Stewen.
+Kommerzielle Nutzung nur mit Genehmigung: info@hallow-tech.de. Die
+WAV-Sounds in `data/` sind Drittmaterial ([freesound.org](https://freesound.org))
+und von der Lizenz ausgenommen.
 Ursprung des Namens und der Idee: das Lasertag-Projekt
 [Infinitag](https://github.com/Infinitag) (2017); Infinitag Now ist eine
 komplette Neuentwicklung als Zauberstab-Spiel, entstanden für einen

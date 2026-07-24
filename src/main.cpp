@@ -765,8 +765,19 @@ static void playSoundByIndex(uint8_t idx) {
 }
 
 // Wendet die persistente Config auf die Laufzeit-Variablen an (Volume in %
-// des Speaker-Limits). Wird nach Boot und nach jedem CFG_WRITE gerufen.
+// des Speaker-Limits, LED-Helligkeit in %). Wird nach Boot und nach jedem
+// CFG_WRITE gerufen.
 static void applyStationConfig() {
+    // Stab-LED-Helligkeit: Prozent -> 0..255 (0 = unset -> 100 %). Das
+    // Rescale von setBrightness() greift beim naechsten Farbwechsel;
+    // show() macht es sofort sichtbar.
+    const uint8_t bright =
+        gSettings.ledBrightPct == 0
+            ? 100
+            : (gSettings.ledBrightPct > 100 ? 100 : gSettings.ledBrightPct);
+    strip.setBrightness((uint16_t)bright * 255 / 100);
+    strip.show();
+
     // Perzeptive Lautstaerke (dB-linear, 40 dB Bereich): 1 % = 0,4 dB.
     // Die Kette (PCM5102A -> TPA3110 an 12 V) ist so laut, dass eine
     // amplituden-lineare Skala alle sinnvollen Zimmerpegel in 0..5 %

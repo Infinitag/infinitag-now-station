@@ -84,10 +84,13 @@ Wichtige Verhaltensregeln aus dem Bring-up (nicht kaputt machen):
   hoch, sondern schlägt vor, wenn ein Stand release-würdig ist, und
   fragt nach. Zwischenstände beim Basteln behalten die Version (der
   Versions-Check der Config-Box zeigt dann Gleichstand – bewusst so).
-- **Release-Prozess:** Version in `NowStation.h` erhöhen → committen →
-  `bash release.sh`. Das Skript baut, taggt `vX.Y.Z`, pusht und erstellt
-  ein **GitHub-Release mit `infinitag-station-vX.Y.Z.bin` als Download**
-  – zu jeder Version liegt so die passende Firmware-Datei bereit.
+- **Release-Prozess:** Version in `NowStation.h` erhöhen → committen
+  (PR) → Tag pushen: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+  **GitHub Actions** (`.github/workflows/release.yml`) prüft Tag ↔
+  Quellversion, baut gegen den in `platformio.ini` kommentierten
+  Core-Tag (CI-Pin – bei Core-Releases mitpflegen!) und erstellt das
+  **GitHub-Release mit `infinitag-station-vX.Y.Z.bin` als Download**.
+  Lokaler Fallback: `bash release.sh`.
 
 ## Lizenz
 

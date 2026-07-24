@@ -120,7 +120,10 @@ INOW_FW_MARKER(inow::DEV_STATION, STATION_FW_MAJOR, STATION_FW_MINOR,
 // Stab R1 150Ω → SK6812-DIN. Spaeter wieder auf produktive Anzahl/Variante.
 #define NEOPIXEL_PIN     6
 #define NEOPIXEL_COUNT   2     // 2x SK6812 RGBW am Stab
-#define NEOPIXEL_BRIGHT  110   // ~43 %, Test: volle 0xFF-Bytes vermeiden (Magenta-Diagnose)
+// Volle Helligkeit wie am Target-Ring. Der fruehere Deckel (110, um bei
+// der Magenta-Diagnose volle 0xFF-Bytes zu vermeiden) war ein Diagnose-
+// Rest - tritt das Magenta-Flackern wieder auf, hier zuerst absenken.
+#define NEOPIXEL_BRIGHT  255
 
 // ── I²S-Konfiguration ────────────────────────────────────────────────────────
 #define I2S_PORT        I2S_NUM_0

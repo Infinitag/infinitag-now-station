@@ -585,6 +585,16 @@ void sendIrTelegram(uint16_t frame) {
         tsopGotIt ? "empfangen ✓" : "KEIN Empfang ✗");
 }
 
+// Waehrend blockierender Wiedergabe laeuft loop() nicht - Status-LED und
+// Laser-Nachleuchten muessen im Chunk-Takt mitbedient werden, sonst friert
+// der Weiss-Blitz ein und das Glow-Aus verpasst seinen Zeitpunkt (beide
+// schreiben nur bei Aenderung auf die Hardware, Kosten ~us).
+static void laserTask();  // definiert weiter unten
+static void playbackHousekeeping() {
+    laserTask();
+    updateStatusLed();
+}
+
 // ── WAV abspielen ────────────────────────────────────────────────────────────
 // Sucht im Header nach dem "data"-Chunk, um Extra-Chunks zu überspringen.
 // Skaliert jedes Sample mit gVolume (Laufzeit-Lautstärke).
@@ -646,6 +656,8 @@ void playWav(const char* path) {
     size_t       written = 0;
 
     while (f.available()) {
+        playbackHousekeeping();  // LED-Farbe/Laser-Glow im ~46-ms-Raster
+
         int n = f.read(buf, BUF);
         if (n <= 0) break;
 
@@ -695,6 +707,7 @@ void playShotSound() {
         // verworfen - der Treffer-Sound ist die Belohnung und darf nicht
         // ~0,7 s warten (Latenzbudget Doc 12 §3.7).
         gNow.loop();
+        playbackHousekeeping();  // LED-Farbe/Laser-Glow weiterlaufen lassen
         if (gPendingSound >= 0) {
             i2s_zero_dma_buffer(I2S_PORT);  // gepufferten Rest (~370 ms) kappen
             return;  // XSMT bleibt aktiv, der Treffer-Sound uebernimmt sofort

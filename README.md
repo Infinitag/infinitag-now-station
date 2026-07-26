@@ -75,7 +75,11 @@ die Luft (siehe unten). Die Sounds (22 kHz, mono, 16 bit) liegen in
 ## Updates
 
 Jede Version gibt es als [GitHub-Release](../../releases) mit fertiger
-`infinitag-station-vX.Y.Z.bin`. Einspielen ohne Kabel:
+`infinitag-station-vX.Y.Z.bin`. Einspielen ohne Kabel – am bequemsten
+per **„Update (Funk)"**: Die Config-Box holt sich das Image selbst von
+GitHub („Update suchen" in der Stationen-Liste) und schiebt es per
+ESP-NOW direkt in die Station, ganz ohne Browser. Alternativ der
+SoftAP-Weg:
 
 1. Config-Box → Station wählen → **„Update (OTA)"**
 2. Die Station öffnet ein WLAN `infinitag-sta-XXXXXX` (Stab pulsiert blau)
@@ -91,7 +95,8 @@ Station nach 5 Minuten automatisch zur alten Firmware zurück.
 Alles Einstellbare läuft über die Config-Box (Funk, persistiert im NVS
 der Station): Lautstärke, IR-ID (Schützen-Kennung im Telegramm, 0–15),
 Stab-Statusfarben (`LED bereit` / `LED aktiv`,
-alle 15 R/G/B/W-Kombinationen). Dazu Sound-Test und kompletter
+alle 15 R/G/B/W-Kombinationen) und LED-Helligkeit in %. Dazu Sound-Test
+und kompletter
 Selbsttest aus der Ferne. Das Funkprotokoll ist in
 [`PROTOCOL.md`](https://github.com/Infinitag/infinitag-now-core/blob/main/PROTOCOL.md)
 spezifiziert (v0x03, inkl. IR-Telegramm).

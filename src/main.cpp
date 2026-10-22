@@ -345,6 +345,15 @@ void drawDisplay() {
     snprintf(buf, sizeof(buf), "S%02u:%s",
         (unsigned)(gSoundIdx + 1), SOUNDS[gSoundIdx].name);
     u8g2.drawStr(0, 49, buf);
+    // Ausgehandelte IR-ID (Schuetzen-Kennung): "IR:?" solange die
+    // Aushandlung laeuft, danach "IR:n". 5 Zeichen = 30 px ab x=84, endet
+    // vor der IR-Status-Box bei x=116.
+    if (gNow.irIdNegotiating()) {
+        snprintf(buf, sizeof(buf), "IR:?");
+    } else {
+        snprintf(buf, sizeof(buf), "IR:%u", (unsigned)gNow.irId());
+    }
+    u8g2.drawStr(84, 49, buf);
     if (gIrCount > 0) {
         // 9x9 Box rechts in der gleichen Zeile, Baseline 49
         const int bx = 116, by = 41, bs = 9;
@@ -592,8 +601,14 @@ void sendIrTelegram(uint16_t frame) {
 // Laser-Nachleuchten muessen im Chunk-Takt mitbedient werden, sonst friert
 // der Weiss-Blitz ein und das Glow-Aus verpasst seinen Zeitpunkt (beide
 // schreiben nur bei Aenderung auf die Hardware, Kosten ~us).
+// Seit der IR-ID-Aushandlung gehoert auch der Funk dazu: ein Inhaber muss
+// Probes anderer Stationen innerhalb ~450 ms beantworten, sonst nimmt sich
+// ein Spaetstarter seine ID (PROTOCOL.md). Nebenwirkung: Funk-Handler
+// laufen jetzt auch mitten im Treffer-Sound (HIT_REPORT queued nur,
+// CFG_WRITE greift sofort, DBG_LED blockiert ~2 s im Sound) - bewusst.
 static void laserTask();  // definiert weiter unten
 static void playbackHousekeeping() {
+    gNow.loop();
     laserTask();
     updateStatusLed();
 }
@@ -709,8 +724,7 @@ void playShotSound() {
         // meldet ein Target den Treffer, wird der Rest des Schuss-Sounds
         // verworfen - der Treffer-Sound ist die Belohnung und darf nicht
         // ~0,7 s warten (Latenzbudget Doc 12 §3.7).
-        gNow.loop();
-        playbackHousekeeping();  // LED-Farbe/Laser-Glow weiterlaufen lassen
+        playbackHousekeeping();  // Funk + LED-Farbe + Laser-Glow
         if (gPendingSound >= 0) {
             i2s_zero_dma_buffer(I2S_PORT);  // gepufferten Rest (~370 ms) kappen
             return;  // XSMT bleibt aktiv, der Treffer-Sound uebernimmt sofort
@@ -1343,7 +1357,7 @@ void loop() {
         gLastShotMs = millis();
         gTrigCount++;
         Serial.printf("[TRIG] Schuss #%lu (irId %u, dmg %u)\n",
-            (unsigned long)gTrigCount, (unsigned)gSettings.irId,
+            (unsigned long)gTrigCount, (unsigned)gNow.irId(),
             (unsigned)IR_SHOT_DAMAGE);
         // Schuss-Laser (Config): Nachleuchten ab jetzt, laserTask schaltet
         if (gSettings.laserMode == inow::LASER_MODE_GLOW) {
@@ -1352,7 +1366,8 @@ void loop() {
                                           ? 1 : gSettings.laserGlow) * 500UL;
         }
         laserTask();            // Laser VOR dem Telegramm an
-        sendIrTelegram(inow::irtEncode(gSettings.irId, IR_SHOT_DAMAGE));
+        // shooter_id = ausgehandelte IR-ID (0 solange die Aushandlung laeuft)
+        sendIrTelegram(inow::irtEncode(gNow.irId(), IR_SHOT_DAMAGE));
         gShotFlashUntil = millis() + SHOT_FLASH_MS;
         updateStatusLed();      // Weiss-Blitz sofort sichtbar
         // Zauber-Sound zum Schuss (max. ~0,73 s; ein eintreffender

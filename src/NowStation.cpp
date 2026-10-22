@@ -14,12 +14,33 @@ bool NowStation::begin(StationSettings *settings, PlayFn playFn,
   _numSounds = numSounds;
   _onConfigChanged = onConfigChanged;
   _bootMs = millis();
-  return _net.begin(ESPNOW_CHANNEL);
+  if (!_net.begin(ESPNOW_CHANNEL)) return false;
+  // Zero-config IR id: the NVS value is only the preference, the
+  // negotiation decides (PROTOCOL.md "IR-ID-Aushandlung").
+  _irid.begin(_net.ownMac(), _settings->irId, millis(), iridSendStatic, this);
+  return true;
 }
 
 void NowStation::loop() {
   RxPacket rx;
   while (_net.receive(rx)) handlePacket(rx);
+
+  // IR id negotiation: probes/beacons by time, persist a freshly held id.
+  // Also runs from the playback housekeeping, so a holder keeps answering
+  // probes while a sound blocks the main loop.
+  _irid.tick(millis());
+  if (_irid.consumeIdChanged()) {
+    const uint8_t id = _irid.irId();
+    if (id != 0) {
+      // Never write 0: the last held id stays the boot preference.
+      _settings->irId = id;
+      _settings->save();
+      Serial.printf("[NOW] IR-ID %u ausgehandelt (gespeichert)\n", id);
+    } else {
+      Serial.println("[NOW] IR-ID abgegeben (Konflikt) - handle neu aus");
+    }
+    _dirty = true;
+  }
 
   // armed trigger test timed out?
   if (_trigTestUntil != 0 && millis() >= _trigTestUntil) {
@@ -28,6 +49,19 @@ void NowStation::loop() {
     Serial.println("[NOW] Trigger-Test: TIMEOUT");
     _dirty = true;
   }
+}
+
+void NowStation::iridSendStatic(IrIdNegotiator::TxKind kind, uint8_t id,
+                                const uint8_t *dstMac, void *ctx) {
+  NowStation *self = static_cast<NowStation *>(ctx);
+  Packet p;
+  init(p, kind == IrIdNegotiator::TX_PROBE ? MSG_IRID_PROBE : MSG_IRID_BEACON,
+       DEV_STATION);
+  p.payload[0] = id;
+  if (dstMac)
+    self->_net.send(dstMac, p);
+  else
+    self->_net.sendBroadcast(p);
 }
 
 uint8_t NowStation::consumeUpdateRequest() {
@@ -144,7 +178,7 @@ void NowStation::sendDiscoverReply(const uint8_t mac[6], uint8_t token) {
   c.led_busy = _settings->ledBusy;
   c.laser_mode = _settings->laserMode;
   c.laser_glow = _settings->laserGlow;
-  c.ir_id = _settings->irId;
+  c.ir_id = _irid.irId();  // negotiated, read-only for the box (0 = pending)
   c.led_bright_pct = _settings->ledBrightPct;
   r.config_blob_len = STATION_BLOB_SIZE;
   encodeStationConfig(c, r.config_blob);
@@ -186,8 +220,7 @@ void NowStation::handlePacket(const RxPacket &rx) {
       decodeStationConfig(p.payload, STATION_BLOB_SIZE, c);
       if (c.volume_pct > 100 || c.led_ready > LED_MASK_MAX ||
           c.led_busy > LED_MASK_MAX || c.laser_mode > LASER_MODE_GLOW ||
-          c.laser_glow > LASER_GLOW_MAX || c.ir_id > IR_ID_MAX ||
-          c.led_bright_pct > 100) {
+          c.laser_glow > LASER_GLOW_MAX || c.led_bright_pct > 100) {
         sendAck(rx.mac, ACK_NACK_VALIDATION);
         break;
       }
@@ -196,7 +229,7 @@ void NowStation::handlePacket(const RxPacket &rx) {
       _settings->ledBusy = c.led_busy;
       _settings->laserMode = c.laser_mode;
       _settings->laserGlow = c.laser_glow == 0 ? 1 : c.laser_glow;
-      _settings->irId = c.ir_id;
+      // c.ir_id is ignored: the id is negotiated, not configured (v3.5).
       // 0 = unset (alter Sender) -> Default behalten (wie Laser-Felder)
       if (c.led_bright_pct != 0) _settings->ledBrightPct = c.led_bright_pct;
       _settings->save();
@@ -205,9 +238,9 @@ void NowStation::handlePacket(const RxPacket &rx) {
       sendAck(rx.mac, ACK_OK);
       Serial.printf(
           "[NOW] CFG_WRITE: vol=%u%% ledRdy=0x%X ledBsy=0x%X laser=%u/%u "
-          "irId=%u bright=%u%%\n",
+          "bright=%u%% (irId %u ignoriert, ausgehandelt: %u)\n",
           c.volume_pct, c.led_ready, c.led_busy, c.laser_mode, c.laser_glow,
-          c.ir_id, c.led_bright_pct);
+          c.led_bright_pct, c.ir_id, _irid.irId());
       break;
     }
 
@@ -220,10 +253,13 @@ void NowStation::handlePacket(const RxPacket &rx) {
 
     case MSG_HIT_REPORT: {
       // Broadcast from a target; play only if the shot came from OUR wand
-      // (shooter_id in the IR telegram matches our configured ir_id).
+      // (shooter_id in the IR telegram matches our negotiated ir_id – or
+      // both are still 0, the factory-group fallback).
       uint8_t shooter = 0, sound = 0, damage = 0;
       decodeHitReport(p.payload, shooter, sound, damage);
-      if (shooter == _settings->irId && _play && sound < _numSounds) {
+      // Every hit is evidence of a live shooter for the id negotiation.
+      _irid.onHitReport(shooter, millis());
+      if (shooter == _irid.irId() && _play && sound < _numSounds) {
         Serial.printf(
             "[NOW] HIT_REPORT von %02X%02X%02X (Schuetze %u, dmg %u) -> "
             "Sound %u\n",
@@ -254,6 +290,14 @@ void NowStation::handlePacket(const RxPacket &rx) {
     case MSG_PUSH_BEGIN:
     case MSG_PUSH_END:
       if (_onPush) _onPush(rx);
+      break;
+
+    case MSG_IRID_PROBE:
+      _irid.onProbe(rx.mac, p.payload[0], millis());
+      break;
+
+    case MSG_IRID_BEACON:
+      _irid.onBeacon(rx.mac, p.payload[0], millis());
       break;
 
     default:

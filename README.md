@@ -93,11 +93,14 @@ Station nach 5 Minuten automatisch zur alten Firmware zurück.
 ## Konfiguration
 
 Alles Einstellbare läuft über die Config-Box (Funk, persistiert im NVS
-der Station): Lautstärke, IR-ID (Schützen-Kennung im Telegramm, 0–15),
+der Station): Lautstärke,
 Stab-Statusfarben (`LED bereit` / `LED aktiv`,
 alle 15 R/G/B/W-Kombinationen) und LED-Helligkeit in %. Dazu Sound-Test
 und kompletter
-Selbsttest aus der Ferne. Das Funkprotokoll ist in
+Selbsttest aus der Ferne. Die IR-ID (Schützen-Kennung im
+Telegramm, 1–15) wird **nicht** konfiguriert, sondern von den Stationen
+untereinander ausgehandelt (Boot: ~3,5 s mithören/anfragen, dann fest;
+OLED zeigt `IR:?` → `IR:n`). Die Box zeigt sie nur an. Das Funkprotokoll ist in
 [`PROTOCOL.md`](https://github.com/Infinitag/infinitag-now-core/blob/main/PROTOCOL.md)
 spezifiziert (v0x03, inkl. IR-Telegramm).
 

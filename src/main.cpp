@@ -454,12 +454,18 @@ static uint32_t maskToColor(uint8_t mask) {
 // Identify-Blink (weiss, 200 ms) > beschaeftigt (Audio spielt, Default rot)
 // > schussbereit (Default gruen). Farben fuer bereit/beschaeftigt kommen
 // aus der persistenten Config (ledReady/ledBusy).
-// Schreibt nur bei Farbwechsel auf den Bus. Wird im loop() gerufen UND
-// direkt vor/nach blockierenden playWav()-Aufrufen, weil loop() waehrend
-// der Wiedergabe nicht laeuft.
+// Schreibt bei Farbwechsel auf den Bus - und zusaetzlich alle
+// LED_REFRESH_MS auch ohne Wechsel: Der SK6812-Strang haelt seinen Zustand
+// nur, bis ihn ein Glitch auf der Datenleitung (IR-Treiber, Laser,
+// Lautsprecher) oder ein fremder show() (Boot-Test per DBG_LED, Helligkeits-
+// Rescale) ueberschreibt. Ohne Refresh blieb so eine falsche Farbe bis zum
+// naechsten Farbwechsel stehen (Feldtest 2026-10-22). Wird im loop()
+// gerufen UND im Chunk-Takt blockierender Wiedergabe (playbackHousekeeping).
+static const uint32_t LED_REFRESH_MS = 500;
 static void updateStatusLed() {
     static bool     init = false;
     static uint32_t last = 0;
+    static uint32_t lastWriteMs = 0;
 
     uint32_t color;
     if (gNow.identifyActive()) {
@@ -478,9 +484,11 @@ static void updateStatusLed() {
         color = maskToColor(gSettings.ledReady);
     }
 
-    if (!init || color != last) {
+    const uint32_t now = millis();
+    if (!init || color != last || (now - lastWriteMs) >= LED_REFRESH_MS) {
         init = true;
         last = color;
+        lastWriteMs = now;
         neopixelSetSolid(color);
     }
 }

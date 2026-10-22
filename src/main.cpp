@@ -606,11 +606,17 @@ void sendIrTelegram(uint16_t frame) {
 // ein Spaetstarter seine ID (PROTOCOL.md). Nebenwirkung: Funk-Handler
 // laufen jetzt auch mitten im Treffer-Sound (HIT_REPORT queued nur,
 // CFG_WRITE greift sofort, DBG_LED blockiert ~2 s im Sound) - bewusst.
+// Der Stab-Trigger wird hier ebenfalls abgetastet und gemerkt: ein Druck
+// waehrend des Treffer-Sounds (1-2 s) ging sonst verloren, weil loop()
+// nicht laeuft (Feldtest 2026-10-22, "Station haengt"). Der Schuss faellt
+// dann direkt nach der Wiedergabe, Cooldown bleibt wirksam.
 static void laserTask();  // definiert weiter unten
+static volatile bool gTrigLatched = false;  // Trigger-Druck waehrend playWav
 static void playbackHousekeeping() {
     gNow.loop();
     laserTask();
     updateStatusLed();
+    if (btnPressedEdge(gBtns[4])) gTrigLatched = true;
 }
 
 // ── WAV abspielen ────────────────────────────────────────────────────────────
@@ -1340,12 +1346,15 @@ void loop() {
     }
 
     // Trigger (GPIO 4): LIVE-SCHUSS.
-    // IR-Burst + Weiss-Blitz am Stab - KEIN lokaler Sound. Der Sound kommt
-    // erst, wenn ein Target den Treffer per HIT_REPORT an unsere MAC
-    // meldet (NowStation spielt dann die gemeldete sound_id). Cooldown
-    // verhindert Dauerfeuer-Spam; der Selbsttest DBG_TRIGGER faengt den
-    // Druck ab, ohne einen Schuss auszuloesen.
-    if (btnPressedEdge(gBtns[4])) {
+    // IR-Telegramm + Weiss-Blitz am Stab + Zauber-Sound. Der Treffer-Sound
+    // kommt erst, wenn ein Target den Treffer per HIT_REPORT mit unserer
+    // Schuetzen-ID meldet (NowStation spielt dann die gemeldete sound_id).
+    // Cooldown verhindert Dauerfeuer-Spam; der Selbsttest DBG_TRIGGER
+    // faengt den Druck ab, ohne einen Schuss auszuloesen. Ein waehrend der
+    // Wiedergabe gemerkter Druck (gTrigLatched) wird hier nachgeholt.
+    const bool trigLatched = gTrigLatched;
+    gTrigLatched = false;
+    if (btnPressedEdge(gBtns[4]) || trigLatched) {
       if (gNow.consumeTriggerTest()) {
         // Selbsttest: Trigger-Test bestanden (Ergebnis geht per Funk an
         // die Config-Box) – kein Schuss ausloesen.

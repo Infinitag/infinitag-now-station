@@ -15,7 +15,7 @@
 // Station firmware version, reported in DISCOVER_REPLY and shown on the
 // update page. Bump on every flashed release, the config box compares it.
 static constexpr uint8_t STATION_FW_MAJOR = 1;
-static constexpr uint8_t STATION_FW_MINOR = 0;
+static constexpr uint8_t STATION_FW_MINOR = 1;
 static constexpr uint8_t STATION_FW_PATCH = 0;
 
 // Hardware hooks for the remote self-test (implemented in main.cpp).

@@ -1,13 +1,15 @@
-// Device-side Infinitag-Now protocol handling for the station (v0x02):
+// Device-side Infinitag-Now protocol handling for the station (v0x03):
 // DISCOVER_REPLY, IDENTIFY, CFG_WRITE/CFG_ACK, CFG_TEST_SOUND, HIT_REPORT
-// (MAC-routed) and UPDATE_BEGIN. Uses the shared EspNowService from
-// infinitag-now-core. See PROTOCOL.md in that repo.
+// (routed by shooter_id), UPDATE_BEGIN and the zero-config IR id
+// negotiation (IRID_PROBE/IRID_BEACON via IrIdNegotiator). Uses the shared
+// EspNowService from infinitag-now-core. See PROTOCOL.md in that repo.
 
 #pragma once
 #include <Arduino.h>
 
 #include "EspNowService.h"
 #include "InfinitagNow.h"
+#include "IrIdNegotiator.h"
 #include "StationSettings.h"
 
 // Station firmware version, reported in DISCOVER_REPLY and shown on the
@@ -64,8 +66,17 @@ class NowStation {
 
   const uint8_t *ownMac() { return _net.ownMac(); }
 
+  // Negotiated IR id (shooter_id of our telegrams, HIT_REPORT filter).
+  // 0 while still negotiating = "factory group" fallback (PROTOCOL.md).
+  uint8_t irId() const { return _irid.irId(); }
+  bool irIdNegotiating() const {
+    return _irid.state() != inow::IrIdNegotiator::HELD;
+  }
+
  private:
   void handlePacket(const RxPacket &rx);
+  static void iridSendStatic(inow::IrIdNegotiator::TxKind kind, uint8_t id,
+                             const uint8_t *dstMac, void *ctx);
   void sendDiscoverReply(const uint8_t mac[6], uint8_t token);
   void sendAck(const uint8_t mac[6], uint8_t status);
   void handleDebugCmd(const RxPacket &rx);
@@ -88,4 +99,9 @@ class NowStation {
   uint8_t _updateReqMin = 0;  // pending UPDATE_BEGIN timeout, 0 = none
   uint32_t _bootMs = 0;
   bool _dirty = false;
+
+  // Zero-config IR id (PROTOCOL.md "IR-ID-Aushandlung"): ticked from
+  // loop(), fed with IRID_PROBE/IRID_BEACON/HIT_REPORT, persists the held
+  // id to NVS as the preference for the next boot.
+  inow::IrIdNegotiator _irid;
 };
